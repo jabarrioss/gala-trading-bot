@@ -182,4 +182,10 @@ DISCORD_WEBHOOK_URL=webhook_url
 
 Each service should have its own logger with file transports. Follow the singleton pattern for database connections and service initialization.
 
+### Development Process Reminders
+
+**📋 TODO Management**: Always update `todo.md` at the end of each development phase to reflect completed features and remaining tasks.
+
+**🔄 Version Control**: Commit all code changes using Git at the end of each development phase with descriptive commit messages.
+
 When building new features, reference `routes/users.js` for working examples of gSwap integration patterns.
