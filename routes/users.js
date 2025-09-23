@@ -3,6 +3,7 @@ var {GSwap, PrivateKeySigner} = require('@gala-chain/gswap-sdk');
 var router = express.Router();
 var dotenv = require('dotenv');
 dotenv.config();
+const yahooFinance = require('yahoo-finance2').default;
 
 /* GET users listing. */
 router.get('/', async function(req, res, next) {
@@ -60,6 +61,22 @@ assets.tokens.forEach((token) => {
   res.send({
     assets,
     asset_count: assets.count,
+  });
+});
+
+router.get('/get-price', async function(req, res, next) {
+  const results = await yahooFinance.quote('GALA-USD');
+  res.send({
+    price: results.regularMarketPrice,
+    currency: results.currency,
+    time: results.regularMarketTime,
+  });
+});
+
+router.get('/get-history', async function(req, res, next) {
+  const results = await yahooFinance.historical('GALA-USD', {period1: '2025-01-01', period2: '2025-09-23', interval: '1d'});
+  res.send({
+    history: results
   });
 });
 module.exports = router;
