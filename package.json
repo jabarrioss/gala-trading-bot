@@ -13,6 +13,7 @@
     "dotenv": "^17.2.2",
     "express": "~4.16.1",
     "morgan": "~1.9.1",
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "yahoo-finance2": "^2.13.3"
   }
 }
