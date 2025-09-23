@@ -31,11 +31,17 @@ class ConfigManager {
       // Trading Parameters
       DRY_RUN_MODE: process.env.DRY_RUN_MODE === 'true' || true, // Default to true for safety
       DEFAULT_SLIPPAGE: parseFloat(process.env.DEFAULT_SLIPPAGE) || 0.05,
-      MAX_TRADE_SIZE: parseFloat(process.env.MAX_TRADE_SIZE) || 1000,
-      DAILY_LOSS_LIMIT: parseFloat(process.env.DAILY_LOSS_LIMIT) || 500,
+      MIN_TRADE_AMOUNT: parseFloat(process.env.MIN_TRADE_AMOUNT) || 1,
+      MAX_TRADE_AMOUNT: parseFloat(process.env.MAX_TRADE_AMOUNT) || 100,
+      MIN_TIME_BETWEEN_TRADES_MS: parseInt(process.env.MIN_TIME_BETWEEN_TRADES_MS) || 3600000,
+
+      // Yahoo Finance Configuration
+      YAHOO_SYMBOL: process.env.YAHOO_SYMBOL || 'GALA-USD',
+      PRICE_CACHE_TIMEOUT_MS: parseInt(process.env.PRICE_CACHE_TIMEOUT_MS) || 60000,
 
       // External APIs
       DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
+      NOTIFICATION_MIN_INTERVAL_MS: parseInt(process.env.NOTIFICATION_MIN_INTERVAL_MS) || 1000,
 
       // Database
       DB_PATH: process.env.DB_PATH || path.join(__dirname, '..', 'data', 'trading.db'),

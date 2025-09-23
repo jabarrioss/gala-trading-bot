@@ -1,5 +1,8 @@
 const config = require('../config/ConfigManager');
 const DatabaseService = require('./DatabaseService');
+const TradingService = require('./TradingService');
+const YahooFinanceService = require('./YahooFinanceService');
+const NotificationService = require('./NotificationService');
 
 /**
  * Service initialization and management
@@ -136,6 +139,9 @@ const serviceManager = new ServiceManager();
 
 // Register core services with priorities
 serviceManager.register('database', DatabaseService, 10); // High priority (low number)
+serviceManager.register('yahooFinance', new YahooFinanceService(), 20); // Data service
+serviceManager.register('notification', new NotificationService(), 30); // Notification service
+serviceManager.register('trading', new TradingService(), 40); // Trading service (depends on others)
 
 // Setup graceful shutdown
 process.on('SIGINT', async () => {
