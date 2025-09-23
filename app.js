@@ -8,6 +8,7 @@ const serviceManager = require('./services/ServiceManager');
 
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
+var tradingRouter = require('./routes/trading');
 
 var app = express();
 
@@ -34,6 +35,7 @@ app.get('/health', async (req, res) => {
 
 app.use('/', indexRouter);
 app.use('/users', usersRouter);
+app.use('/trading', tradingRouter);
 
 // Initialize services when app starts (skip during testing)
 if (process.env.SKIP_SERVICE_INIT !== 'true') {
