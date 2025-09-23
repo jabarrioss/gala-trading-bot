@@ -1,13 +1,13 @@
+// Test version of app.js without service initialization
 var express = require('express');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 
-// Import service manager for initialization
-const serviceManager = require('./services/ServiceManager');
+const serviceManager = require('../services/ServiceManager');
 
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
+var indexRouter = require('../routes/index');
+var usersRouter = require('../routes/users');
 
 var app = express();
 
@@ -15,7 +15,7 @@ app.use(logger('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Add health check endpoint
 app.get('/health', async (req, res) => {
@@ -35,16 +35,6 @@ app.get('/health', async (req, res) => {
 app.use('/', indexRouter);
 app.use('/users', usersRouter);
 
-// Initialize services when app starts (skip during testing)
-if (process.env.SKIP_SERVICE_INIT !== 'true') {
-  (async () => {
-    try {
-      await serviceManager.initializeAll();
-    } catch (error) {
-      console.error('Failed to initialize services:', error);
-      process.exit(1);
-    }
-  })();
-}
+// DO NOT initialize services in test app
 
 module.exports = app;

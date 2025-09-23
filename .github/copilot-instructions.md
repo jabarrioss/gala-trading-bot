@@ -164,7 +164,7 @@ Required `.env` variables (create from patterns in existing routes):
 
 ```bash
 PRIVATE_KEY=wallet_private_key
-WALLET_ADDRESS=eth|0x123...abc
+WALLET_ADDRESS=eth|123...abc
 NODE_ENV=development
 DRY_RUN_MODE=true
 DEFAULT_SLIPPAGE=0.05
@@ -185,7 +185,5 @@ Each service should have its own logger with file transports. Follow the singlet
 ### Development Process Reminders
 
 **📋 TODO Management**: Always update `todo.md` at the end of each development phase to reflect completed features and remaining tasks.
-
-**🔄 Version Control**: Commit all code changes using Git at the end of each development phase with descriptive commit messages.
 
 When building new features, reference `routes/users.js` for working examples of gSwap integration patterns.

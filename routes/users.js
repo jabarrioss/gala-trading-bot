@@ -4,7 +4,6 @@ var router = express.Router();
 var dotenv = require('dotenv');
 dotenv.config();
 const yahooFinance = require('yahoo-finance2').default;
-
 /* GET users listing. */
 router.get('/', async function(req, res, next) {
   await GSwap.events.connectEventSocket();
@@ -65,6 +64,7 @@ assets.tokens.forEach((token) => {
 });
 
 router.get('/get-price', async function(req, res, next) {
+  yahooFinance.suppressNotices(['yahooSurvey']);
   const results = await yahooFinance.quote('GALA-USD');
   res.send({
     price: results.regularMarketPrice,

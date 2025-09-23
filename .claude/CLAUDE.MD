@@ -46,7 +46,7 @@ The application follows a service-oriented architecture with dependency injectio
 ```bash
 # Blockchain Configuration
 PRIVATE_KEY=your_wallet_private_key_here
-WALLET_ADDRESS=eth|0x123...abc
+WALLET_ADDRESS=eth|123...abc
 
 # Environment Settings
 NODE_ENV=development|production
