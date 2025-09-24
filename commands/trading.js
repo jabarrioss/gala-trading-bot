@@ -51,9 +51,10 @@ async function runTradingAnalysis(symbol = null) {
         return null;
       }
 
-      // Get historical data for Golden Cross analysis
-      const historicalData = await priceOracleService.getGoldenCrossData(symbolData.gala_symbol, {
-        lookbackDays: 250
+      // Get historical data for DCA analysis
+      const historicalData = await priceOracleService.getDCAData(symbolData.gala_symbol, {
+        lookbackDays: 365,
+        interval: 'daily'
       });
 
       if (!historicalData.success) {
@@ -61,16 +62,14 @@ async function runTradingAnalysis(symbol = null) {
         return null;
       }
 
-      // Extract prices from historical data for analysis
-      const prices = historicalData.data.map(item => item.close);
-      
-      // Analyze using Golden Cross strategy
-      const analysis = tradingService.analyzeGoldenCrossStrategy(
-        prices,
-        symbolData.strategy_config?.golden_cross || {
-          shortPeriod: 50,
-          longPeriod: 200,
-          useRSI: true
+      // Analyze using DCA strategy
+      const analysis = tradingService.analyzeDCAStrategy(
+        historicalData.data,
+        symbolData.strategy_config?.dca || {
+          investmentAmount: 100,
+          interval: 'daily',
+          volatilityThreshold: 0.15,
+          minInvestmentPeriods: 30
         }
       );
 
@@ -120,9 +119,10 @@ async function runTradingAnalysis(symbol = null) {
             continue;
           }
           
-          // Get historical data for Golden Cross analysis
-          const historicalData = await priceOracleService.getGoldenCrossData(symbolData.gala_symbol, {
-            lookbackDays: 250
+          // Get historical data for DCA analysis
+          const historicalData = await priceOracleService.getDCAData(symbolData.gala_symbol, {
+            lookbackDays: 365,
+            interval: 'daily'
           });
 
           if (!historicalData.success) {
@@ -138,16 +138,14 @@ async function runTradingAnalysis(symbol = null) {
             continue;
           }
 
-          // Extract prices from historical data for analysis
-          const prices = historicalData.data.map(item => item.close);
-          
-          // Analyze using Golden Cross strategy
-          const analysis = tradingService.analyzeGoldenCrossStrategy(
-            prices,
-            symbolData.strategy_config?.golden_cross || {
-              shortPeriod: 50,
-              longPeriod: 200,
-              useRSI: true
+          // Analyze using DCA strategy
+          const analysis = tradingService.analyzeDCAStrategy(
+            historicalData.data,
+            symbolData.strategy_config?.dca || {
+              investmentAmount: 100,
+              interval: 'daily',
+              volatilityThreshold: 0.15,
+              minInvestmentPeriods: 30
             }
           );
 
