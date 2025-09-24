@@ -19,4 +19,39 @@ describe('API Integration Tests', () => {
     // Should get some response (may be error due to missing services, that's ok)
     expect(response.status).toBeDefined();
   });
+
+  describe('Trading API', () => {
+    test('POST /trading/close-all should handle service not available', async () => {
+      const response = await request(app)
+        .post('/trading/close-all')
+        .send({ force: true });
+      
+      // Should return error when services are not initialized
+      expect(response.status).toBe(500);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error).toBe('Trading service not available');
+    });
+
+    test('POST /trading/close-all should accept force parameter', async () => {
+      const response = await request(app)
+        .post('/trading/close-all')
+        .send({ force: false });
+      
+      // Should handle the request even with different force value
+      expect(response.status).toBe(500); // Will fail due to missing services, but accepted the request
+      expect(response.body).toHaveProperty('success');
+      expect(response.body).toHaveProperty('timestamp');
+    });
+
+    test('POST /trading/close-all should handle malformed request', async () => {
+      const response = await request(app)
+        .post('/trading/close-all')
+        .send({ invalid: 'data' });
+      
+      // Should still handle the request (force defaults to false)
+      expect(response.status).toBe(500); // Will fail due to missing services
+      expect(response.body).toHaveProperty('success');
+      expect(response.body).toHaveProperty('timestamp');
+    });
+  });
 });

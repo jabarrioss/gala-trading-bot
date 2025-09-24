@@ -662,6 +662,116 @@ class NotificationService extends BaseService {
       return false;
     }
   }
+
+  /**
+   * Send close all positions summary notification
+   * @param {Object} summary - Close all positions summary
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendCloseAllPositionsNotification(summary) {
+    if (!this.enabled) {
+      this.logger.debug('Notifications disabled, skipping close all positions notification');
+      return false;
+    }
+
+    try {
+      const {
+        positionsClosed,
+        positionsFailed,
+        totalPositions,
+        totalGalaRecovered,
+        results
+      } = summary;
+
+      const isSuccess = positionsClosed > 0;
+      const hasFailures = positionsFailed > 0;
+      
+      // Determine color based on results
+      let color;
+      if (isSuccess && !hasFailures) {
+        color = 0x00ff00; // Green - all successful
+      } else if (isSuccess && hasFailures) {
+        color = 0xffff00; // Yellow - partial success
+      } else {
+        color = 0xff0000; // Red - all failed
+      }
+
+      const title = `🔄 Close All Positions ${isSuccess ? 'Completed' : 'Failed'}`;
+      
+      const embed = {
+        title,
+        color,
+        fields: [
+          {
+            name: 'Summary',
+            value: `${positionsClosed}/${totalPositions} positions closed successfully`,
+            inline: false
+          },
+          {
+            name: 'GALA Recovered',
+            value: `${totalGalaRecovered.toFixed(4)} GALA`,
+            inline: true
+          },
+          {
+            name: 'Failed Positions',
+            value: positionsFailed.toString(),
+            inline: true
+          }
+        ],
+        timestamp: new Date().toISOString()
+      };
+
+      // Add details for each position (limit to avoid Discord limits)
+      if (results.length > 0) {
+        const maxDetailsToShow = 10;
+        const successfulPositions = results.filter(r => r.success);
+        const failedPositions = results.filter(r => !r.success);
+
+        if (successfulPositions.length > 0) {
+          const successDetails = successfulPositions
+            .slice(0, maxDetailsToShow)
+            .map(r => `✅ ${r.symbol}: ${r.gala_recovered?.toFixed(4) || 'N/A'} GALA`)
+            .join('\n');
+          
+          embed.fields.push({
+            name: `Closed Positions (${successfulPositions.length > maxDetailsToShow ? `${maxDetailsToShow}/${successfulPositions.length}` : successfulPositions.length})`,
+            value: successDetails || 'None',
+            inline: false
+          });
+        }
+
+        if (failedPositions.length > 0) {
+          const failedDetails = failedPositions
+            .slice(0, maxDetailsToShow)
+            .map(r => `❌ ${r.symbol}: ${r.error || 'Unknown error'}`)
+            .join('\n');
+          
+          embed.fields.push({
+            name: `Failed Positions (${failedPositions.length > maxDetailsToShow ? `${maxDetailsToShow}/${failedPositions.length}` : failedPositions.length})`,
+            value: failedDetails || 'None',
+            inline: false
+          });
+        }
+      }
+
+      const payload = {
+        content: isSuccess ? 
+          `🎯 Close All Positions completed: **${totalGalaRecovered.toFixed(4)} GALA** recovered from ${positionsClosed} positions` :
+          '⚠️ Close All Positions operation failed',
+        embeds: [embed]
+      };
+
+      const result = await this.sendWebhook(payload);
+      if (result) {
+        this.logger.info(`Close all positions notification sent: ${positionsClosed} closed, ${positionsFailed} failed`);
+      }
+      return result;
+
+    } catch (error) {
+      this.logger.error('Failed to send close all positions notification:', error);
+      return false;
+    }
+  }
 }
 
 module.exports = NotificationService;

@@ -719,4 +719,56 @@ router.post('/symbol/:symbol/trade', async (req, res) => {
   }
 });
 
+/**
+ * POST /trading/close-all
+ * Close all open positions and convert them back to GALA
+ * Body: { force: boolean } - Force close all positions regardless of profit/loss thresholds
+ */
+router.post('/close-all', async (req, res) => {
+  try {
+    const { force = false } = req.body;
+    
+    const tradingService = serviceManager.get('trading');
+    
+    if (!tradingService) {
+      return res.status(500).json({
+        success: false,
+        error: 'Trading service not available',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Execute close all positions operation
+    const result = await tradingService.closeAllPositions({ force });
+
+    res.json({
+      success: result.success,
+      ...result,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error in close all positions:', error);
+    
+    // Send error notification
+    try {
+      const notificationService = serviceManager.get('notification');
+      if (notificationService) {
+        await notificationService.sendError('Close All Positions Error', error, {
+          endpoint: '/trading/close-all',
+          force: req.body.force
+        });
+      }
+    } catch (notificationError) {
+      console.error('Failed to send error notification:', notificationError);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: error.message || 'An unexpected error occurred',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 module.exports = router;
