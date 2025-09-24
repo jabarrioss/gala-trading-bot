@@ -378,6 +378,11 @@ class TradingService extends BaseService {
         throw new Error('GSwap not initialized');
       }
 
+      // Validate that fromToken and toToken are different
+      if (fromToken === toToken) {
+        throw new Error(`Cannot create pool of same tokens. fromToken and toToken must be different (both are: ${fromToken})`);
+      }
+
       const quote = await this.gSwap.quoting.quoteExactInput(
         fromToken,
         toToken,
@@ -1253,6 +1258,22 @@ class TradingService extends BaseService {
           // Check if we should execute trade
           if (analysis.signal === 'BUY' && analysis.confidence >= minimumConfidence) {
             this.logger.info(`🎯 Strong ${analysis.signal} signal for ${symbolData.symbol} (confidence: ${(analysis.confidence * 100).toFixed(1)}%)`);
+
+            // Skip trading if trying to swap GALA for GALA (same token)
+            if (symbolData.gala_symbol === 'GALA|Unit|none|none') {
+              this.logger.warn(`⚠️ Skipping trade for ${symbolData.symbol}: Cannot swap GALA for GALA (same token)`);
+              result.tradeResults.push({
+                symbol: symbolData.symbol,
+                signal: analysis.signal,
+                confidence: analysis.confidence,
+                trade: {
+                  success: false,
+                  error: 'Cannot swap GALA for GALA (same token)',
+                  skipped: true
+                }
+              });
+              continue;
+            }
 
             // Execute the trade
             let tradeResult;
