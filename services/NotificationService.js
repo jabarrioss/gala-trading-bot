@@ -542,6 +542,126 @@ class NotificationService extends BaseService {
       return false;
     }
   }
+
+  /**
+   * Send buyback execution notification
+   * @param {Object} buybackData - Buyback execution data
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendBuybackNotification(buybackData) {
+    if (!this.enabled) return false;
+
+    try {
+      const { position, currentPrice, finalGalaAmount, finalPnL, swapResult } = buybackData;
+      const {
+        symbol,
+        token_symbol,
+        entry_price,
+        entry_amount,
+        token_amount,
+        strategy
+      } = position;
+
+      const isDryRun = swapResult.dryRun;
+      const isProfit = finalPnL.percentagePnL > 0;
+      
+      // Determine color and emoji based on PnL
+      const color = isDryRun ? 0x0099ff : (isProfit ? 0x00ff00 : 0xff6b6b);
+      const pnlEmoji = isProfit ? '📈' : '📉';
+      const actionEmoji = isDryRun ? '🧪' : '🔄';
+      
+      const title = isDryRun 
+        ? `${actionEmoji} Dry Run Buyback Executed`
+        : `${actionEmoji} Conditional Buyback Executed`;
+
+      const pnlSign = finalPnL.percentagePnL >= 0 ? '+' : '';
+      const pnlText = `${pnlEmoji} ${pnlSign}${finalPnL.percentagePnL.toFixed(2)}% (${pnlSign}${finalPnL.absolutePnL.toFixed(4)} GALA)`;
+
+      const embed = {
+        title,
+        color,
+        fields: [
+          {
+            name: 'Position',
+            value: symbol,
+            inline: true
+          },
+          {
+            name: 'Strategy',
+            value: strategy,
+            inline: true
+          },
+          {
+            name: 'Token',
+            value: token_symbol,
+            inline: true
+          },
+          {
+            name: 'Entry Details',
+            value: `**Price**: ${entry_price.toFixed(6)}\n**Amount**: ${entry_amount} GALA`,
+            inline: true
+          },
+          {
+            name: 'Exit Details',
+            value: `**Price**: ${currentPrice.toFixed(6)}\n**Tokens**: ${token_amount}`,
+            inline: true
+          },
+          {
+            name: 'Final PnL',
+            value: pnlText,
+            inline: true
+          },
+          {
+            name: 'GALA Received',
+            value: `${finalGalaAmount.toFixed(4)} GALA`,
+            inline: true
+          }
+        ],
+        timestamp: new Date().toISOString(),
+        footer: {
+          text: isDryRun ? 'Dry Run Mode - No actual trades executed' : 'Live Trading Mode'
+        }
+      };
+
+      // Add transaction details for live trades
+      if (!isDryRun && swapResult.transaction) {
+        embed.fields.push({
+          name: 'Transaction',
+          value: swapResult.transaction.transactionId || 'N/A',
+          inline: false
+        });
+      }
+
+      // Add buyback reason
+      if (finalPnL.percentagePnL >= 5) {
+        embed.fields.push({
+          name: 'Trigger Reason',
+          value: '🎯 Profit target reached (+5%)',
+          inline: false
+        });
+      } else if (finalPnL.percentagePnL <= -2) {
+        embed.fields.push({
+          name: 'Trigger Reason',
+          value: '🛑 Stop loss triggered (-2%)',
+          inline: false
+        });
+      }
+
+      const payload = {
+        embeds: [embed]
+      };
+
+      const result = await this.sendWebhook(payload);
+      if (result) {
+        this.logger.info(`Buyback notification sent for position ${position.id}`);
+      }
+      return result;
+
+    } catch (error) {
+      this.logger.error('Failed to send buyback notification:', error);
+      return false;
+    }
+  }
 }
 
 module.exports = NotificationService;
