@@ -129,23 +129,43 @@ class PriceOracleService extends BaseService {
       // Convert pipe symbols to dollar symbols for API calls
       const apiSymbol = galaSymbol.replace(/\|/g, '$');
       
-      // Build query parameters for historical data
-      const params = new URLSearchParams({
-        token: apiSymbol,
-        page: 1,
-        limit: 50, // Maximum allowed
-        from: startDate.toISOString()
-      });
-
-      const response = await fetch(`${ORACLE_URL}?${params}`);
+      // Fetch multiple pages to get enough historical data
+      // Need 201+ data points for Golden Cross analysis (200-day MA + 1 for comparison)
+      const allData = [];
+      const maxPages = 5; // Increased to 5 pages to get 250 data points
+      const limit = 50; // Maximum allowed per page
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      for (let page = 1; page <= maxPages; page++) {
+        const params = new URLSearchParams({
+          token: apiSymbol,
+          page: page,
+          limit: limit,
+          from: startDate.toISOString()
+        });
+
+        const response = await fetch(`${ORACLE_URL}?${params}`);
+        
+        if (!response.ok) {
+          this.logger.warn(`Failed to fetch page ${page} for ${galaSymbol}: HTTP ${response.status}`);
+          break; // Stop fetching if we hit an error
+        }
+
+        const pageData = await response.json();
+        
+        if (!pageData || !pageData.data || !pageData.data.data || pageData.data.data.length === 0) {
+          this.logger.warn(`No data on page ${page} for ${galaSymbol}`);
+          break; // Stop fetching if no more data
+        }
+        
+        allData.push(...pageData.data.data);
+        
+        // If we got less than the limit, we've reached the end
+        if (pageData.data.data.length < limit) {
+          break;
+        }
       }
-
-      const data = await response.json();
       
-      if (!data || !data.data || !data.data.data || data.data.data.length === 0) {
+      if (allData.length === 0) {
         return {
           success: false,
           error: `No historical data found for ${galaSymbol}`,
@@ -154,8 +174,10 @@ class PriceOracleService extends BaseService {
       }
 
       // Convert to Yahoo Finance format for compatibility
-      // Note: Oracle data might be limited, so we'll work with what we have
-      const historicalData = data.data.data.map(item => ({
+      // Sort by date (oldest first) for proper technical analysis
+      const sortedData = allData.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      
+      const historicalData = sortedData.map(item => ({
         date: new Date(item.timestamp || item.createdAt || Date.now()),
         open: parseFloat(item.price),
         high: parseFloat(item.price),
