@@ -67,16 +67,12 @@ router.get('/get-gala-balance', async function(req, res, next) {
   try {
     const serviceManager = require('../services/ServiceManager');
     
-    // Initialize services if not already done
-    if (!serviceManager.isInitialized()) {
-      await serviceManager.initializeAll();
-    }
-    
+    // Get the trading service (should be initialized from app.js)
     const tradingService = serviceManager.get('trading');
-    if (!tradingService) {
-      return res.status(500).json({
+    if (!tradingService || !tradingService.isReady()) {
+      return res.status(503).json({
         success: false,
-        error: 'TradingService not available'
+        error: 'TradingService not available or not initialized'
       });
     }
 
@@ -135,16 +131,12 @@ router.post('/execute-swap', async function(req, res, next) {
 
     const serviceManager = require('../services/ServiceManager');
     
-    // Initialize services if not already done
-    if (!serviceManager.isInitialized()) {
-      await serviceManager.initializeAll();
-    }
-    
+    // Get the trading service (should be initialized from app.js)
     const tradingService = serviceManager.get('trading');
-    if (!tradingService) {
-      return res.status(500).json({
+    if (!tradingService || !tradingService.isReady()) {
+      return res.status(503).json({
         success: false,
-        error: 'TradingService not available'
+        error: 'TradingService not available or not initialized'
       });
     }
 
@@ -172,6 +164,98 @@ router.post('/execute-swap', async function(req, res, next) {
 
   } catch (error) {
     console.error('Error executing swap:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+router.get('/trade-history', async function(req, res, next) {
+  try {
+    const { strategy, limit = 50, offset = 0 } = req.query;
+    
+    const serviceManager = require('../services/ServiceManager');
+    
+    // Get the trading service (should be initialized from app.js)
+    const tradingService = serviceManager.get('trading');
+    if (!tradingService || !tradingService.isReady()) {
+      return res.status(503).json({
+        success: false,
+        error: 'TradingService not available or not initialized'
+      });
+    }
+
+    console.log(`📊 Fetching trade history - Strategy: ${strategy || 'All'}, Limit: ${limit}`);
+
+    // Get trade history
+    const trades = await tradingService.getTradeHistory(strategy, {
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
+
+    // Get trade statistics
+    const stats = await tradingService.getTradeStats(strategy);
+
+    console.log(`✅ Retrieved ${trades.length} trades with stats:`, stats);
+
+    res.json({
+      success: true,
+      trades: trades,
+      stats: stats,
+      query: {
+        strategy: strategy || 'All',
+        limit: parseInt(limit),
+        offset: parseInt(offset)
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error getting trade history:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+router.get('/trade-stats', async function(req, res, next) {
+  try {
+    const { strategy, symbol } = req.query;
+    
+    const serviceManager = require('../services/ServiceManager');
+    
+    // Get the trading service (should be initialized from app.js)
+    const tradingService = serviceManager.get('trading');
+    if (!tradingService || !tradingService.isReady()) {
+      return res.status(503).json({
+        success: false,
+        error: 'TradingService not available or not initialized'
+      });
+    }
+
+    console.log(`📈 Fetching trade stats - Strategy: ${strategy || 'All'}, Symbol: ${symbol || 'All'}`);
+
+    // Get trade statistics
+    const stats = await tradingService.getTradeStats(strategy, symbol);
+
+    console.log(`✅ Trade statistics:`, stats);
+
+    res.json({
+      success: true,
+      stats: stats,
+      query: {
+        strategy: strategy || 'All',
+        symbol: symbol || 'All'
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error getting trade stats:', error);
     res.status(500).json({
       success: false,
       error: error.message,

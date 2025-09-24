@@ -112,6 +112,23 @@
       <button class="button danger" onclick="executeSwap(false)">💰 Execute Live Swap</button>
     </div>
 
+    <!-- Trade History Section -->
+    <div class="container">
+      <h2>📈 Trade History & Statistics</h2>
+      <div class="form-group">
+        <label for="strategyFilter">Filter by Strategy:</label>
+        <select id="strategyFilter">
+          <option value="">All Strategies</option>
+          <option value="Manual">Manual</option>
+          <option value="MonitorStrategy_DCA">Monitor DCA</option>
+          <option value="MonitorStrategy_GOLDEN_CROSS">Monitor Golden Cross</option>
+        </select>
+      </div>
+      <button class="button" onclick="loadTradeHistory()">📊 Load Trade History</button>
+      <button class="button" onclick="loadTradeStats()">📈 Load Trade Statistics</button>
+      <div id="trade-history"></div>
+    </div>
+
     <!-- Results Section -->
     <div class="container">
       <h2>📊 Results</h2>
@@ -228,6 +245,126 @@
           button.className = 'button danger';
         }
       });
+
+      async function loadTradeHistory() {
+        try {
+          const strategy = document.getElementById('strategyFilter').value;
+          const queryParams = strategy ? `?strategy=${encodeURIComponent(strategy)}` : '';
+          
+          const response = await fetch(`/users/trade-history${queryParams}`);
+          const data = await response.json();
+          
+          const historyDiv = document.getElementById('trade-history');
+          if (data.success && data.trades.length > 0) {
+            let html = `
+              <h3>📊 Trade Statistics</h3>
+              <div style="background: #f0f0f0; padding: 10px; margin: 10px 0; border-radius: 4px;">
+                <strong>Total Trades:</strong> ${data.stats.totalTrades} | 
+                <strong>Success Rate:</strong> ${(data.stats.successRate * 100).toFixed(1)}% | 
+                <strong>Total Volume:</strong> ${data.stats.totalVolume.toFixed(4)} | 
+                <strong>Average Trade:</strong> ${data.stats.averageTradeSize.toFixed(4)}
+              </div>
+              <h3>📋 Recent Trades (${data.trades.length} records)</h3>
+              <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; background: white;">
+                <table style="width: 100%; border-collapse: collapse;">
+                  <thead>
+                    <tr style="background: #f5f5f5;">
+                      <th style="padding: 8px; border: 1px solid #ddd;">Date</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Strategy</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Symbol</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Side</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Amount</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Price</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Status</th>
+                      <th style="padding: 8px; border: 1px solid #ddd;">Mode</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+            `;
+            
+            data.trades.forEach(trade => {
+              const date = new Date(trade.executed_at).toLocaleString();
+              const statusColor = trade.status === 'COMPLETED' ? '#4CAF50' : '#f44336';
+              const modeColor = trade.dry_run ? '#ff9800' : '#2196F3';
+              
+              html += `
+                <tr>
+                  <td style="padding: 6px; border: 1px solid #ddd; font-size: 12px;">${date}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd;">${trade.strategy}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd;"><strong>${trade.symbol}</strong></td>
+                  <td style="padding: 6px; border: 1px solid #ddd;">${trade.side}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd;">${trade.amount}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd;">${trade.price.toFixed(6)}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd; color: ${statusColor}; font-weight: bold;">${trade.status}</td>
+                  <td style="padding: 6px; border: 1px solid #ddd; color: ${modeColor}; font-weight: bold;">${trade.dry_run ? 'DRY' : 'LIVE'}</td>
+                </tr>
+              `;
+            });
+            
+            html += '</tbody></table></div>';
+            historyDiv.innerHTML = html;
+          } else if (data.success) {
+            historyDiv.innerHTML = '<p>No trades found for the selected criteria.</p>';
+          } else {
+            historyDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+          }
+          
+          updateResults(data, 'Trade History');
+        } catch (error) {
+          updateResults({error: error.message}, 'Trade History Error');
+        }
+      }
+
+      async function loadTradeStats() {
+        try {
+          const strategy = document.getElementById('strategyFilter').value;
+          const queryParams = strategy ? `?strategy=${encodeURIComponent(strategy)}` : '';
+          
+          const response = await fetch(`/users/trade-stats${queryParams}`);
+          const data = await response.json();
+          
+          const historyDiv = document.getElementById('trade-history');
+          if (data.success) {
+            const stats = data.stats;
+            historyDiv.innerHTML = `
+              <h3>📈 Trading Statistics</h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0;">
+                <div style="background: #e8f5e8; padding: 15px; border-radius: 8px;">
+                  <h4 style="margin: 0 0 10px 0; color: #2e7d32;">Total Trades</h4>
+                  <div style="font-size: 24px; font-weight: bold; color: #1b5e20;">${stats.totalTrades}</div>
+                </div>
+                <div style="background: #e3f2fd; padding: 15px; border-radius: 8px;">
+                  <h4 style="margin: 0 0 10px 0; color: #1976d2;">Success Rate</h4>
+                  <div style="font-size: 24px; font-weight: bold; color: #0d47a1;">${(stats.successRate * 100).toFixed(1)}%</div>
+                </div>
+                <div style="background: #f3e5f5; padding: 15px; border-radius: 8px;">
+                  <h4 style="margin: 0 0 10px 0; color: #7b1fa2;">Total Volume</h4>
+                  <div style="font-size: 24px; font-weight: bold; color: #4a148c;">${stats.totalVolume.toFixed(4)}</div>
+                </div>
+                <div style="background: #fff3e0; padding: 15px; border-radius: 8px;">
+                  <h4 style="margin: 0 0 10px 0; color: #f57c00;">Avg Trade Size</h4>
+                  <div style="font-size: 24px; font-weight: bold; color: #e65100;">${stats.averageTradeSize.toFixed(4)}</div>
+                </div>
+              </div>
+              <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 15px;">
+                <h4 style="margin: 0 0 10px 0;">Detailed Breakdown</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">
+                  <div><strong>Successful:</strong> ${stats.successfulTrades}</div>
+                  <div><strong>Failed:</strong> ${stats.failedTrades}</div>
+                  <div><strong>Live Trades:</strong> ${stats.liveTrades || 0}</div>
+                  <div><strong>Dry Runs:</strong> ${stats.dryRunTrades || 0}</div>
+                </div>
+              </div>
+            `;
+          } else {
+            historyDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+          }
+          
+          updateResults(data, 'Trade Statistics');
+        } catch (error) {
+          updateResults({error: error.message}, 'Trade Statistics Error');
+        }
+      }
 
       // Load balance on page load
       window.addEventListener('load', function() {

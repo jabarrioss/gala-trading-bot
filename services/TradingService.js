@@ -507,6 +507,21 @@ class TradingService extends BaseService {
 
       if (dryRun) {
         this.logger.info('DRY RUN: Trade would be executed with above parameters');
+        // Log dry run trade
+        await this.logTradeExecution({
+          fromToken,
+          toToken,
+          amount,
+          expectedPrice: quote.outTokenAmount.dividedBy(amount).toNumber(),
+          expectedOutput: quote.outTokenAmount.toString(),
+          slippage,
+          feeTier: quote.feeTier,
+          status: 'COMPLETED',
+          dryRun: true,
+          strategy: options.strategy || 'Manual',
+          notes: 'Dry run execution - no actual swap performed'
+        });
+
         return {
           success: true,
           dryRun: true,
@@ -542,6 +557,23 @@ class TradingService extends BaseService {
           feeTier: quote.feeTier
         });
 
+        // Log successful trade
+        const executedPrice = quote.outTokenAmount.dividedBy(amount).toNumber();
+        await this.logTradeExecution({
+          fromToken,
+          toToken,
+          amount,
+          expectedPrice: executedPrice,
+          expectedOutput: quote.outTokenAmount.toString(),
+          slippage,
+          feeTier: quote.feeTier,
+          status: 'COMPLETED',
+          dryRun: false,
+          strategy: options.strategy || 'Manual',
+          txHash: pendingTx.transactionId,
+          notes: `Live trade executed successfully on ${quote.feeTier} fee tier`
+        });
+
         return {
           success: true,
           dryRun: false,
@@ -556,6 +588,26 @@ class TradingService extends BaseService {
 
     } catch (error) {
       this.logger.error('Error executing swap:', error);
+      
+      // Log failed trade
+      try {
+        await this.logTradeExecution({
+          fromToken,
+          toToken,
+          amount,
+          expectedPrice: 0,
+          expectedOutput: '0',
+          slippage,
+          feeTier: 'N/A',
+          status: 'FAILED',
+          dryRun,
+          strategy: options.strategy || 'Manual',
+          notes: `Trade failed: ${error.message}`
+        });
+      } catch (logError) {
+        this.logger.error('Error logging failed trade:', logError);
+      }
+
       return {
         success: false,
         error: error.message,
@@ -891,7 +943,8 @@ class TradingService extends BaseService {
     const {
       dryRun = this.isDryRun,
       slippage = this.defaultSlippage,
-      sendNotification = true
+      sendNotification = true,
+      strategy = 'Manual'
     } = options;
 
     const swapResult = {
@@ -931,7 +984,7 @@ class TradingService extends BaseService {
       swapResult.initialGalaBalance = balanceCheck.balance || balanceCheck.available;
 
       // Step 3: Execute the swap
-      const tradeResult = await this.executeSwap(fromToken, toToken, amount, { dryRun, slippage });
+      const tradeResult = await this.executeSwap(fromToken, toToken, amount, { dryRun, slippage, strategy });
       
       swapResult.success = tradeResult.success;
       swapResult.trade = tradeResult;
@@ -1177,7 +1230,10 @@ class TradingService extends BaseService {
                 'GALA|Unit|none|none',
                 symbolData.gala_symbol,
                 tradeAmount,
-                { sendNotification: sendNotifications }
+                { 
+                  sendNotification: sendNotifications,
+                  strategy: `MonitorStrategy_${strategy.toUpperCase()}`
+                }
               );
             }
 
@@ -1231,6 +1287,109 @@ class TradingService extends BaseService {
       this.logger.error('Error in automated trading:', error);
       result.error = error.message;
       return result;
+    }
+  }
+
+  /**
+   * Log trade execution to database
+   * @param {Object} tradeData - Trade execution data
+   * @returns {Promise<number>} - Trade ID from database
+   */
+  async logTradeExecution(tradeData) {
+    try {
+      const databaseService = this.getDatabaseService();
+      
+      // Extract symbol from token format (e.g., "GALA|Unit|none|none" -> "GALA")
+      const fromSymbol = this.formatTokenName(tradeData.fromToken);
+      const toSymbol = this.formatTokenName(tradeData.toToken);
+      
+      // Determine trade side and symbol
+      let side, symbol;
+      if (fromSymbol === 'GALA') {
+        side = 'SELL'; // Selling GALA
+        symbol = 'GALA';
+      } else if (toSymbol === 'GALA') {
+        side = 'BUY'; // Buying GALA
+        symbol = 'GALA';
+      } else {
+        side = 'SWAP';
+        symbol = `${fromSymbol}/${toSymbol}`;
+      }
+
+      // Calculate total value
+      const totalValue = tradeData.amount * tradeData.expectedPrice;
+
+      // Prepare trade data for database
+      const dbTradeData = {
+        strategy: tradeData.strategy || 'Manual',
+        symbol: symbol,
+        side: side,
+        amount: tradeData.amount,
+        price: tradeData.expectedPrice,
+        total_value: totalValue,
+        slippage: tradeData.slippage || this.defaultSlippage,
+        fee: tradeData.fee || 0,
+        status: tradeData.status || 'COMPLETED',
+        tx_hash: tradeData.txHash || null,
+        dry_run: tradeData.dryRun || false,
+        executed_at: new Date().toISOString(),
+        notes: tradeData.notes || null
+      };
+
+      this.logger.info(`📝 Logging trade: ${dbTradeData.strategy} ${dbTradeData.side} ${dbTradeData.amount} ${dbTradeData.symbol}`, {
+        dryRun: dbTradeData.dry_run,
+        status: dbTradeData.status,
+        totalValue: dbTradeData.total_value
+      });
+
+      const tradeId = await databaseService.logTrade(dbTradeData);
+      
+      this.logger.info(`✅ Trade logged with ID: ${tradeId}`);
+      return tradeId;
+
+    } catch (error) {
+      this.logger.error('Error logging trade execution:', error);
+      // Don't throw - logging should not break trade execution
+      return null;
+    }
+  }
+
+  /**
+   * Get trade history from database
+   * @param {string} strategy - Strategy name to filter by (optional)
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Array of trade records
+   */
+  async getTradeHistory(strategy = null, options = {}) {
+    try {
+      const databaseService = this.getDatabaseService();
+      return await databaseService.getTradeHistory(strategy, options);
+    } catch (error) {
+      this.logger.error('Error getting trade history:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get trade statistics from database
+   * @param {string} strategy - Strategy name to filter by (optional)
+   * @param {string} symbol - Symbol to filter by (optional)
+   * @returns {Promise<Object>} - Trade statistics
+   */
+  async getTradeStats(strategy = null, symbol = null) {
+    try {
+      const databaseService = this.getDatabaseService();
+      return await databaseService.getTradeStats(strategy, symbol);
+    } catch (error) {
+      this.logger.error('Error getting trade stats:', error);
+      return {
+        totalTrades: 0,
+        successfulTrades: 0,
+        failedTrades: 0,
+        totalVolume: 0,
+        averageTradeSize: 0,
+        successRate: 0
+      };
     }
   }
 }
