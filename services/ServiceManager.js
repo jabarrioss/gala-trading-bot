@@ -5,6 +5,8 @@ const YahooFinanceService = require('./YahooFinanceService');
 const NotificationService = require('./NotificationService');
 const CoinMarketCapService = require('./CoinMarketCapService');
 const BinanceService = require('./BinanceService');
+const PriceOracleService = require('./PriceOracleService');
+
 /**
  * Service initialization and management
  */
@@ -141,9 +143,10 @@ const serviceManager = new ServiceManager();
 // Register core services with priorities
 serviceManager.register('database', DatabaseService, 10); // High priority (low number)
 serviceManager.register('yahooFinance', new YahooFinanceService(), 20); // Data service
+serviceManager.register('priceOracle', new PriceOracleService(), 25); // Price Oracle service
 serviceManager.register('notification', new NotificationService(), 30); // Notification service
+serviceManager.register('coinMarketCap', new CoinMarketCapService(), 35); // CoinMarketCap service
 serviceManager.register('trading', new TradingService(), 40); // Trading service (depends on others)
-serviceManager.register('coinMarketCap', new CoinMarketCapService(), 25); // CoinMarketCap service
 
 // Setup graceful shutdown (only in production or when explicitly enabled)
 if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SIGNAL_HANDLERS === 'true') {
