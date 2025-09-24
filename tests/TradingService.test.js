@@ -274,4 +274,163 @@ describe('TradingService', () => {
       expect(status.isDryRun).toBe(true);
     });
   });
+
+  describe('closeAllPositions', () => {
+    let mockDatabaseService;
+    let mockNotificationService;
+
+    beforeEach(() => {
+      // Mock database service
+      mockDatabaseService = {
+        getOpenPositions: jest.fn(),
+        closePosition: jest.fn(),
+        logTrade: jest.fn()
+      };
+      
+      // Mock notification service
+      mockNotificationService = {
+        sendCloseAllPositionsNotification: jest.fn()
+      };
+
+      // Mock ServiceManager.get
+      const ServiceManager = require('../services/ServiceManager');
+      ServiceManager.get = jest.fn((serviceName) => {
+        if (serviceName === 'database') return mockDatabaseService;
+        if (serviceName === 'notification') return mockNotificationService;
+        return null;
+      });
+
+      // Mock getDatabaseService method
+      tradingService.getDatabaseService = jest.fn().mockReturnValue(mockDatabaseService);
+    });
+
+    it('should handle no open positions', async () => {
+      mockDatabaseService.getOpenPositions.mockResolvedValue([]);
+
+      const result = await tradingService.closeAllPositions({ force: true });
+
+      expect(result.success).toBe(true);
+      expect(result.positionsClosed).toBe(0);
+      expect(result.positionsFailed).toBe(0);
+      expect(result.totalGalaRecovered).toBe(0);
+      expect(result.message).toBe('No open positions to close');
+      expect(mockDatabaseService.getOpenPositions).toHaveBeenCalled();
+    });
+
+    it('should close all open positions successfully', async () => {
+      const mockPositions = [
+        {
+          id: 1,
+          symbol: 'GALA/GUSDC',
+          token_symbol: 'GUSDC',
+          gala_symbol: 'GUSDC|Unit|none|none',
+          token_amount: 100,
+          entry_amount: 50
+        },
+        {
+          id: 2,
+          symbol: 'GALA/GWETH',
+          token_symbol: 'GWETH', 
+          gala_symbol: 'GWETH|Unit|none|none',
+          token_amount: 0.05,
+          entry_amount: 75
+        }
+      ];
+
+      mockDatabaseService.getOpenPositions.mockResolvedValue(mockPositions);
+      
+      // Mock executeBuyback to succeed
+      tradingService.executeBuyback = jest.fn()
+        .mockResolvedValueOnce({
+          success: true,
+          finalGalaAmount: 48.5,
+          tradeId: 123
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          finalGalaAmount: 72.3,
+          tradeId: 124
+        });
+
+      const result = await tradingService.closeAllPositions({ force: true });
+
+      expect(result.success).toBe(true);
+      expect(result.positionsClosed).toBe(2);
+      expect(result.positionsFailed).toBe(0);
+      expect(result.totalPositions).toBe(2);
+      expect(result.totalGalaRecovered).toBe(120.8); // 48.5 + 72.3
+      expect(result.results).toHaveLength(2);
+      
+      // Verify executeBuyback was called for each position
+      expect(tradingService.executeBuyback).toHaveBeenCalledTimes(2);
+      expect(tradingService.executeBuyback).toHaveBeenCalledWith(mockPositions[0], null);
+      expect(tradingService.executeBuyback).toHaveBeenCalledWith(mockPositions[1], null);
+      
+      // Verify notification was sent
+      expect(mockNotificationService.sendCloseAllPositionsNotification).toHaveBeenCalledWith(result);
+    });
+
+    it('should handle mixed success and failure', async () => {
+      const mockPositions = [
+        {
+          id: 1,
+          symbol: 'GALA/GUSDC',
+          token_symbol: 'GUSDC',
+          gala_symbol: 'GUSDC|Unit|none|none',
+          token_amount: 100,
+          entry_amount: 50
+        },
+        {
+          id: 2,
+          symbol: 'GALA/GWETH',
+          token_symbol: 'GWETH',
+          gala_symbol: 'GWETH|Unit|none|none', 
+          token_amount: 0.05,
+          entry_amount: 75
+        }
+      ];
+
+      mockDatabaseService.getOpenPositions.mockResolvedValue(mockPositions);
+      
+      // Mock executeBuyback - first succeeds, second fails
+      tradingService.executeBuyback = jest.fn()
+        .mockResolvedValueOnce({
+          success: true,
+          finalGalaAmount: 48.5,
+          tradeId: 123
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'Insufficient liquidity'
+        });
+
+      const result = await tradingService.closeAllPositions({ force: true });
+
+      expect(result.success).toBe(true);
+      expect(result.positionsClosed).toBe(1);
+      expect(result.positionsFailed).toBe(1);
+      expect(result.totalPositions).toBe(2);
+      expect(result.totalGalaRecovered).toBe(48.5);
+      expect(result.results).toHaveLength(2);
+      
+      // Check individual results
+      expect(result.results[0].success).toBe(true);
+      expect(result.results[0].status).toBe('COMPLETED');
+      expect(result.results[1].success).toBe(false);
+      expect(result.results[1].status).toBe('FAILED');
+      expect(result.results[1].error).toBe('Insufficient liquidity');
+    });
+
+    it('should handle database service errors', async () => {
+      mockDatabaseService.getOpenPositions.mockRejectedValue(new Error('Database connection failed'));
+
+      const result = await tradingService.closeAllPositions({ force: true });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Database connection failed');
+      expect(result.positionsClosed).toBe(0);
+      expect(result.positionsFailed).toBe(0);
+      expect(result.totalGalaRecovered).toBe(0);
+    });
+  });
 });

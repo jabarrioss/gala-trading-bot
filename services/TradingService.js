@@ -1831,6 +1831,132 @@ class TradingService extends BaseService {
       };
     }
   }
+
+  /**
+   * Close all open positions by converting them back to GALA
+   * @param {Object} options - Close all options
+   * @returns {Promise<Object>} - Close all result summary
+   */
+  async closeAllPositions(options = {}) {
+    const { force = false } = options;
+    
+    try {
+      this.logger.info('🔄 Starting close all positions operation...');
+      
+      const databaseService = this.getDatabaseService();
+      if (!databaseService) {
+        throw new Error('Database service not available');
+      }
+      
+      const openPositions = await databaseService.getOpenPositions();
+      
+      if (openPositions.length === 0) {
+        return {
+          success: true,
+          message: 'No open positions to close',
+          positionsClosed: 0,
+          positionsFailed: 0,
+          totalGalaRecovered: 0,
+          results: []
+        };
+      }
+
+      this.logger.info(`📊 Found ${openPositions.length} open positions to close`);
+
+      const results = [];
+      let positionsClosed = 0;
+      let positionsFailed = 0;
+      let totalGalaRecovered = 0;
+
+      // Process each position
+      for (const position of openPositions) {
+        try {
+          this.logger.info(`🔄 Closing position ${position.id}: ${position.token_amount} ${position.token_symbol} -> GALA`);
+          
+          // Execute buyback regardless of profit/loss thresholds since this is forced
+          const buybackResult = await this.executeBuyback(position, null);
+          
+          const result = {
+            positionId: position.id,
+            symbol: position.symbol,
+            token_symbol: position.token_symbol,
+            token_amount: position.token_amount,
+            success: buybackResult.success
+          };
+
+          if (buybackResult.success) {
+            result.gala_recovered = buybackResult.finalGalaAmount || 0;
+            result.trade_id = buybackResult.tradeId;
+            result.status = 'COMPLETED';
+            
+            totalGalaRecovered += result.gala_recovered;
+            positionsClosed++;
+            
+            this.logger.info(`✅ Position ${position.id} closed successfully, recovered ${result.gala_recovered} GALA`);
+          } else {
+            result.error = buybackResult.error;
+            result.status = 'FAILED';
+            positionsFailed++;
+            
+            this.logger.error(`❌ Failed to close position ${position.id}: ${buybackResult.error}`);
+          }
+
+          results.push(result);
+
+        } catch (error) {
+          this.logger.error(`❌ Error closing position ${position.id}:`, error);
+          
+          results.push({
+            positionId: position.id,
+            symbol: position.symbol,
+            token_symbol: position.token_symbol,
+            success: false,
+            error: error.message,
+            status: 'FAILED'
+          });
+          
+          positionsFailed++;
+        }
+      }
+
+      const summary = {
+        success: true,
+        message: `Close all positions completed: ${positionsClosed} closed, ${positionsFailed} failed`,
+        positionsClosed,
+        positionsFailed,
+        totalPositions: openPositions.length,
+        totalGalaRecovered,
+        results
+      };
+
+      this.logger.info(`📊 Close all positions summary: ${positionsClosed}/${openPositions.length} positions closed, ${totalGalaRecovered} GALA recovered`);
+
+      // Send Discord notification
+      try {
+        const ServiceManager = require('./ServiceManager');
+        const notificationService = ServiceManager.get('notification');
+        
+        if (notificationService) {
+          await notificationService.sendCloseAllPositionsNotification(summary);
+        }
+      } catch (notificationError) {
+        this.logger.warn('Failed to send close all positions notification:', notificationError.message);
+      }
+
+      return summary;
+
+    } catch (error) {
+      this.logger.error('❌ Error in close all positions operation:', error);
+      return {
+        success: false,
+        error: (error && error.message) || error || 'Unknown error occurred',
+        positionsClosed: 0,
+        positionsFailed: 0,
+        totalGalaRecovered: 0,
+        results: []
+      };
+    }
+  }
 }
 
 module.exports = TradingService;
