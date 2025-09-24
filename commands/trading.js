@@ -281,23 +281,77 @@ async function main() {
         break;
 
       case 'monitor':
-        console.log('👀 Starting continuous monitoring...');
+        console.log('👀 Starting continuous monitoring with auto-execution...');
+        console.log('🔥 TRADES WILL BE EXECUTED AUTOMATICALLY WHEN CONDITIONS ARE MET');
         console.log('Press Ctrl+C to stop');
         
-        // Run analysis every 5 minutes
+        // Get monitoring interval from environment or default to 5 minutes
+        const monitorInterval = parseInt(process.env.MONITOR_INTERVAL_MINUTES || '5') * 60 * 1000;
+        console.log(`📊 Monitoring interval: ${monitorInterval / 60000} minutes`);
+        
+        // Run automated trading every interval
         setInterval(async () => {
-          console.log(`\n⏰ ${new Date().toLocaleTimeString()} - Running scheduled analysis...`);
-          await runTradingAnalysis();
-        }, 5 * 60 * 1000);
+          console.log(`\n⏰ ${new Date().toLocaleTimeString()} - Running automated trading cycle...`);
+          
+          try {
+            const tradingService = serviceManager.get('trading');
+            if (!tradingService) {
+              console.error('❌ TradingService not available');
+              return;
+            }
+
+            // Execute automated trading with DCA strategy
+            const result = await tradingService.executeAutomatedTrading({
+              strategy: 'dca',
+              minimumConfidence: 0.7,
+              sendNotifications: true
+            });
+
+            if (result.success) {
+              console.log(`✅ Trading cycle completed: ${result.tradesExecuted} trades executed`);
+              if (result.tradeResults.length > 0) {
+                console.log('📈 Trade Results:');
+                result.tradeResults.forEach(trade => {
+                  console.log(`   ${trade.symbol}: ${trade.signal} (${(trade.confidence * 100).toFixed(1)}% confidence) - ${trade.trade?.success ? 'SUCCESS' : 'FAILED'}`);
+                });
+              }
+            } else {
+              console.error('❌ Trading cycle failed:', result.error);
+            }
+
+            if (result.errors.length > 0) {
+              console.log('⚠️ Errors during analysis:');
+              result.errors.forEach(err => {
+                console.log(`   ${err.symbol}: ${err.error}`);
+              });
+            }
+
+          } catch (error) {
+            console.error('❌ Error in automated trading cycle:', error);
+          }
+        }, monitorInterval);
         
         // Keep the process alive
         process.on('SIGINT', () => {
-          console.log('\n👋 Stopping monitor...');
+          console.log('\n👋 Stopping automated trading monitor...');
           process.exit(0);
         });
         
-        // Run initial analysis
-        await runTradingAnalysis();
+        // Run initial trading cycle
+        console.log('🚀 Running initial trading cycle...');
+        try {
+          const tradingService = serviceManager.get('trading');
+          if (tradingService) {
+            const result = await tradingService.executeAutomatedTrading({
+              strategy: 'dca',
+              minimumConfidence: 0.7,
+              sendNotifications: true
+            });
+            console.log(`✅ Initial cycle completed: ${result.tradesExecuted} trades executed`);
+          }
+        } catch (error) {
+          console.error('❌ Error in initial trading cycle:', error);
+        }
         break;
 
       default:

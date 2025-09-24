@@ -63,6 +63,47 @@ assets.tokens.forEach((token) => {
   });
 });
 
+router.get('/get-gala-balance', async function(req, res, next) {
+  try {
+    const serviceManager = require('../services/ServiceManager');
+    
+    // Initialize services if not already done
+    if (!serviceManager.isInitialized()) {
+      await serviceManager.initializeAll();
+    }
+    
+    const tradingService = serviceManager.get('trading');
+    if (!tradingService) {
+      return res.status(500).json({
+        success: false,
+        error: 'TradingService not available'
+      });
+    }
+
+    // Get GALA balance
+    const balanceResult = await tradingService.getGalaBalance();
+    
+    console.log('GALA Balance Check:', balanceResult);
+    
+    res.json({
+      success: balanceResult.success,
+      gala_balance: balanceResult.balance,
+      has_gala: balanceResult.hasGala,
+      message: balanceResult.message,
+      error: balanceResult.error,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error getting GALA balance:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 router.get('/get-price', async function(req, res, next) {
   yahooFinance.suppressNotices(['yahooSurvey']);
   const results = await yahooFinance.quote('GALA-USD');
@@ -79,4 +120,64 @@ router.get('/get-history', async function(req, res, next) {
     history: results
   });
 });
+
+router.post('/execute-swap', async function(req, res, next) {
+  try {
+    const { fromToken, toToken, amount, dryRun } = req.body;
+    
+    // Validate required parameters
+    if (!fromToken || !toToken || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required parameters: fromToken, toToken, amount'
+      });
+    }
+
+    const serviceManager = require('../services/ServiceManager');
+    
+    // Initialize services if not already done
+    if (!serviceManager.isInitialized()) {
+      await serviceManager.initializeAll();
+    }
+    
+    const tradingService = serviceManager.get('trading');
+    if (!tradingService) {
+      return res.status(500).json({
+        success: false,
+        error: 'TradingService not available'
+      });
+    }
+
+    console.log(`🔄 Executing swap: ${amount} ${fromToken} → ${toToken}`);
+    console.log(`🧪 Dry Run: ${dryRun ? 'YES' : 'NO'}`);
+
+    // Execute swap with balance check and notifications
+    const swapResult = await tradingService.executeSwapWithBalanceCheck(
+      fromToken,
+      toToken,
+      parseFloat(amount),
+      {
+        dryRun: dryRun === true || dryRun === 'true',
+        sendNotification: true
+      }
+    );
+
+    console.log('Swap Result:', swapResult);
+
+    res.json({
+      success: swapResult.success,
+      swap_result: swapResult,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error executing swap:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
 module.exports = router;

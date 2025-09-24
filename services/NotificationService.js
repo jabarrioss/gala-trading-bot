@@ -443,6 +443,105 @@ class NotificationService extends BaseService {
       lastSentTime: this.lastSentTime
     };
   }
+
+  /**
+   * Send automated trading summary notification
+   * @param {Object} summary - Trading summary result
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendTradingSummary(summary) {
+    if (!this.enabled) {
+      this.logger.debug('Notifications disabled, skipping trading summary');
+      return false;
+    }
+
+    try {
+      const isSuccessful = summary.success && summary.tradesExecuted > 0;
+      const color = isSuccessful ? 0x00ff00 : (summary.success ? 0xffff00 : 0xff0000); // Green, Yellow, Red
+      
+      let title, description;
+      if (isSuccessful) {
+        title = `🎯 Automated Trading - ${summary.tradesExecuted} Trade${summary.tradesExecuted > 1 ? 's' : ''} Executed`;
+        description = `Successfully executed ${summary.tradesExecuted} trades using ${summary.strategy.toUpperCase()} strategy`;
+      } else if (summary.success) {
+        title = '📊 Automated Trading - No Trades Executed';
+        description = `Analysis completed but no trades met the criteria (${summary.strategy.toUpperCase()} strategy)`;
+      } else {
+        title = '❌ Automated Trading - Failed';
+        description = `Trading cycle failed: ${summary.error}`;
+      }
+
+      const embed = {
+        title: title,
+        description: description,
+        color: color,
+        timestamp: summary.timestamp,
+        fields: [
+          {
+            name: 'Strategy',
+            value: summary.strategy.toUpperCase(),
+            inline: true
+          },
+          {
+            name: 'Trades Executed',
+            value: summary.tradesExecuted.toString(),
+            inline: true
+          }
+        ]
+      };
+
+      // Add trade results if any
+      if (summary.tradeResults && summary.tradeResults.length > 0) {
+        const successfulTrades = summary.tradeResults.filter(t => t.trade?.success);
+        const failedTrades = summary.tradeResults.filter(t => !t.trade?.success);
+
+        if (successfulTrades.length > 0) {
+          embed.fields.push({
+            name: '✅ Successful Trades',
+            value: successfulTrades.map(t => 
+              `**${t.symbol}**: ${t.signal} (${(t.confidence * 100).toFixed(1)}%)`
+            ).join('\n').substring(0, 1000),
+            inline: false
+          });
+        }
+
+        if (failedTrades.length > 0) {
+          embed.fields.push({
+            name: '❌ Failed Trades',
+            value: failedTrades.map(t => 
+              `**${t.symbol}**: ${t.trade?.error || 'Unknown error'}`
+            ).join('\n').substring(0, 1000),
+            inline: false
+          });
+        }
+      }
+
+      // Add errors if any
+      if (summary.errors && summary.errors.length > 0) {
+        embed.fields.push({
+          name: '⚠️ Analysis Errors',
+          value: summary.errors.map(e => 
+            `**${e.symbol}**: ${e.error}`
+          ).join('\n').substring(0, 1000),
+          inline: false
+        });
+      }
+
+      const payload = {
+        embeds: [embed]
+      };
+
+      const result = await this.sendWebhook(payload);
+      if (result) {
+        this.logger.info('Trading summary notification sent successfully');
+      }
+      return result;
+
+    } catch (error) {
+      this.logger.error('Failed to send trading summary notification:', error);
+      return false;
+    }
+  }
 }
 
 module.exports = NotificationService;

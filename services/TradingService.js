@@ -50,6 +50,108 @@ class TradingService extends BaseService {
   }
 
   /**
+   * Get GALA balance from wallet
+   * @returns {Promise<Object>} GALA balance information
+   */
+  async getGalaBalance() {
+    try {
+      if (!this.gSwap) {
+        throw new Error('GSwap client not initialized');
+      }
+
+      if (!this.walletAddress) {
+        throw new Error('Wallet address not configured');
+      }
+
+      // Get wallet assets
+      const assets = await this.gSwap.assets.getUserAssets(
+        this.walletAddress,
+        1, // page number
+        50 // limit - get more tokens to ensure we find GALA
+      );
+
+      // Find GALA token
+      const galaToken = assets.tokens.find(token => 
+        token.symbol === 'GALA' || token.symbol === 'GALA|Unit|none|none'
+      );
+
+      if (!galaToken) {
+        return {
+          success: true,
+          balance: 0,
+          hasGala: false,
+          message: 'No GALA tokens found in wallet'
+        };
+      }
+
+      const balance = parseFloat(galaToken.quantity) || 0;
+
+      this.logger.info(`GALA Balance: ${balance} GALA`);
+      
+      return {
+        success: true,
+        balance: balance,
+        hasGala: balance > 0,
+        token: galaToken,
+        message: `Wallet contains ${balance} GALA tokens`
+      };
+
+    } catch (error) {
+      this.logger.error('Error getting GALA balance:', error);
+      return {
+        success: false,
+        balance: 0,
+        hasGala: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Check if wallet has sufficient GALA for trading
+   * @param {number} requiredAmount - Required GALA amount
+   * @returns {Promise<Object>} Balance check result
+   */
+  async checkGalaBalance(requiredAmount) {
+    try {
+      const balanceInfo = await this.getGalaBalance();
+      
+      if (!balanceInfo.success) {
+        return {
+          success: false,
+          hasEnough: false,
+          available: 0,
+          required: requiredAmount,
+          error: balanceInfo.error
+        };
+      }
+
+      const hasEnough = balanceInfo.balance >= requiredAmount;
+      
+      return {
+        success: true,
+        hasEnough: hasEnough,
+        available: balanceInfo.balance,
+        required: requiredAmount,
+        surplus: balanceInfo.balance - requiredAmount,
+        message: hasEnough 
+          ? `Sufficient GALA: ${balanceInfo.balance} available, ${requiredAmount} required`
+          : `Insufficient GALA: ${balanceInfo.balance} available, ${requiredAmount} required (need ${requiredAmount - balanceInfo.balance} more)`
+      };
+
+    } catch (error) {
+      this.logger.error('Error checking GALA balance:', error);
+      return {
+        success: false,
+        hasEnough: false,
+        available: 0,
+        required: requiredAmount,
+        error: error.message
+      };
+    }
+  }
+
+  /**
    * Initialize the trading service
    */
   async onInit() {
@@ -775,6 +877,361 @@ class TradingService extends BaseService {
       lastTradeTime: this.lastTradeTime,
       canTrade: !this.lastTradeTime || Date.now() - this.lastTradeTime >= this.minTimeBetweenTrades
     };
+  }
+
+  /**
+   * Execute a comprehensive swap with balance checks and notifications
+   * @param {string} fromToken - Source token symbol (in GALA format)
+   * @param {string} toToken - Target token symbol (in GALA format)
+   * @param {number} amount - Amount to swap
+   * @param {Object} options - Swap options
+   * @returns {Promise<Object>} - Comprehensive swap result
+   */
+  async executeSwapWithBalanceCheck(fromToken, toToken, amount, options = {}) {
+    const {
+      dryRun = this.isDryRun,
+      slippage = this.defaultSlippage,
+      sendNotification = true
+    } = options;
+
+    const swapResult = {
+      success: false,
+      timestamp: new Date().toISOString(),
+      fromToken,
+      toToken,
+      requestedAmount: amount,
+      dryRun
+    };
+
+    try {
+      // Step 1: Check if we're starting with GALA
+      const isStartingWithGala = fromToken.includes('GALA');
+      const isEndingWithGala = toToken.includes('GALA');
+
+      // Step 2: Check GALA balance before any operation
+      let balanceCheck;
+      if (isStartingWithGala) {
+        // Starting with GALA - check we have enough
+        balanceCheck = await this.checkGalaBalance(amount);
+        if (!balanceCheck.success || !balanceCheck.hasEnough) {
+          swapResult.error = 'Insufficient GALA balance';
+          swapResult.balanceCheck = balanceCheck;
+          
+          if (sendNotification) {
+            await this.sendSwapNotification(swapResult);
+          }
+          
+          return swapResult;
+        }
+      } else {
+        // Not starting with GALA - just get current balance for context
+        balanceCheck = await this.getGalaBalance();
+      }
+
+      swapResult.initialGalaBalance = balanceCheck.balance || balanceCheck.available;
+
+      // Step 3: Execute the swap
+      const tradeResult = await this.executeSwap(fromToken, toToken, amount, { dryRun, slippage });
+      
+      swapResult.success = tradeResult.success;
+      swapResult.trade = tradeResult;
+
+      if (!tradeResult.success) {
+        swapResult.error = tradeResult.error;
+      }
+
+      // Step 4: Check final GALA balance
+      const finalBalanceCheck = await this.getGalaBalance();
+      swapResult.finalGalaBalance = finalBalanceCheck.balance || 0;
+      swapResult.galaBalanceChange = swapResult.finalGalaBalance - swapResult.initialGalaBalance;
+
+      // Step 5: Send notification
+      if (sendNotification) {
+        await this.sendSwapNotification(swapResult);
+      }
+
+      return swapResult;
+
+    } catch (error) {
+      this.logger.error('Error in executeSwapWithBalanceCheck:', error);
+      
+      swapResult.error = error.message;
+      
+      if (sendNotification) {
+        await this.sendSwapNotification(swapResult);
+      }
+      
+      return swapResult;
+    }
+  }
+
+  /**
+   * Send swap notification to Discord
+   * @param {Object} swapResult - Swap result object
+   */
+  async sendSwapNotification(swapResult) {
+    try {
+      const notificationService = require('./ServiceManager').get('notification');
+      if (!notificationService) {
+        this.logger.warn('NotificationService not available for swap notification');
+        return;
+      }
+
+      const isSuccess = swapResult.success;
+      const color = isSuccess ? 0x00ff00 : 0xff0000; // Green for success, red for failure
+      
+      const embed = {
+        title: `${isSuccess ? '✅' : '❌'} Swap ${isSuccess ? 'Executed' : 'Failed'}`,
+        color: color,
+        timestamp: swapResult.timestamp,
+        fields: [
+          {
+            name: 'Token Pair',
+            value: `${this.formatTokenName(swapResult.fromToken)} → ${this.formatTokenName(swapResult.toToken)}`,
+            inline: true
+          },
+          {
+            name: 'Amount',
+            value: `${swapResult.requestedAmount} ${this.formatTokenName(swapResult.fromToken)}`,
+            inline: true
+          },
+          {
+            name: 'Mode',
+            value: swapResult.dryRun ? '🧪 DRY RUN' : '💰 LIVE',
+            inline: true
+          }
+        ]
+      };
+
+      // Add balance information
+      if (swapResult.initialGalaBalance !== undefined) {
+        embed.fields.push({
+          name: 'GALA Balance',
+          value: `Before: ${swapResult.initialGalaBalance}\nAfter: ${swapResult.finalGalaBalance || 'N/A'}\nChange: ${swapResult.galaBalanceChange ? (swapResult.galaBalanceChange > 0 ? '+' : '') + swapResult.galaBalanceChange : 'N/A'}`,
+          inline: false
+        });
+      }
+
+      // Add error information if failed
+      if (!isSuccess && swapResult.error) {
+        embed.fields.push({
+          name: 'Error',
+          value: swapResult.error.substring(0, 1000), // Limit error message length
+          inline: false
+        });
+      }
+
+      // Add trade details if successful
+      if (isSuccess && swapResult.trade) {
+        const trade = swapResult.trade;
+        if (trade.expectedOutput) {
+          embed.fields.push({
+            name: 'Expected Output',
+            value: `${trade.expectedOutput} ${this.formatTokenName(swapResult.toToken)}`,
+            inline: true
+          });
+        }
+        if (trade.quote?.feeTier) {
+          embed.fields.push({
+            name: 'Fee Tier',
+            value: trade.quote.feeTier,
+            inline: true
+          });
+        }
+      }
+
+      const payload = {
+        embeds: [embed]
+      };
+
+      await notificationService.sendWebhook(payload);
+      this.logger.info('Swap notification sent to Discord');
+
+    } catch (error) {
+      this.logger.error('Failed to send swap notification:', error);
+    }
+  }
+
+  /**
+   * Format token name for display
+   * @param {string} tokenSymbol - Token symbol in GALA format
+   * @returns {String} - Formatted token name
+   */
+  formatTokenName(tokenSymbol) {
+    if (tokenSymbol.includes('|')) {
+      return tokenSymbol.split('|')[0];
+    }
+    return tokenSymbol;
+  }
+
+  /**
+   * Execute automated trading with comprehensive monitoring
+   * Designed to be called from the monitor command
+   * @param {Object} options - Trading options
+   * @returns {Promise<Object>} - Trading execution result
+   */
+  async executeAutomatedTrading(options = {}) {
+    const {
+      symbols = null, // null = all symbols, or array of specific symbols
+      strategy = 'dca', // 'dca' or 'golden_cross'
+      minimumConfidence = 0.7,
+      sendNotifications = true
+    } = options;
+
+    const result = {
+      success: false,
+      timestamp: new Date().toISOString(),
+      strategy,
+      tradesExecuted: 0,
+      tradeResults: [],
+      errors: []
+    };
+
+    try {
+      this.logger.info(`🤖 Starting automated trading - Strategy: ${strategy.toUpperCase()}`);
+
+      // Get symbols to analyze
+      let symbolsToAnalyze;
+      if (symbols) {
+        // Filter specific symbols
+        const allSymbols = await this.getTradingSymbols();
+        symbolsToAnalyze = allSymbols.filter(s => symbols.includes(s.symbol));
+      } else {
+        // Get all trading symbols
+        symbolsToAnalyze = await this.getTradingSymbols();
+      }
+
+      if (symbolsToAnalyze.length === 0) {
+        result.error = 'No trading symbols found';
+        return result;
+      }
+
+      this.logger.info(`📊 Analyzing ${symbolsToAnalyze.length} symbols for trading opportunities`);
+
+      // Analyze each symbol and execute trades
+      for (const symbolData of symbolsToAnalyze) {
+        try {
+          this.logger.info(`🔍 Analyzing ${symbolData.symbol}...`);
+
+          // Get price oracle service for data
+          const priceOracleService = require('./ServiceManager').get('priceOracle');
+          if (!priceOracleService) {
+            throw new Error('PriceOracleService not available');
+          }
+
+          // Get historical data based on strategy
+          let historicalData;
+          let analysis;
+
+          if (strategy === 'dca') {
+            historicalData = await priceOracleService.getDCAData(symbolData.gala_symbol, {
+              lookbackDays: 365,
+              interval: 'daily'
+            });
+
+            if (!historicalData.success) {
+              throw new Error(`Failed to fetch DCA data: ${historicalData.error}`);
+            }
+
+            analysis = this.analyzeDCAStrategy(
+              historicalData.data,
+              symbolData.strategy_config?.dca || {
+                investmentAmount: 100,
+                interval: 'daily',
+                volatilityThreshold: 0.15,
+                minInvestmentPeriods: 30
+              }
+            );
+          } else {
+            // Golden Cross strategy
+            historicalData = await priceOracleService.getGoldenCrossData(symbolData.gala_symbol, {
+              lookbackDays: 250
+            });
+
+            if (!historicalData.success) {
+              throw new Error(`Failed to fetch Golden Cross data: ${historicalData.error}`);
+            }
+
+            const prices = historicalData.data.map(item => item.close);
+            analysis = this.analyzeGoldenCrossStrategy(
+              prices,
+              symbolData.strategy_config?.golden_cross || {
+                shortPeriod: 50,
+                longPeriod: 200,
+                useRSI: true
+              }
+            );
+          }
+
+          // Check if we should execute trade
+          if (analysis.signal === 'BUY' && analysis.confidence >= minimumConfidence) {
+            this.logger.info(`🎯 Strong ${analysis.signal} signal for ${symbolData.symbol} (confidence: ${(analysis.confidence * 100).toFixed(1)}%)`);
+
+            // Execute the trade
+            let tradeResult;
+            const tradeAmount = symbolData.min_trade_amount || this.minTradeAmount;
+
+            if (analysis.signal === 'BUY') {
+              // Buy: GALA -> Target Token
+              tradeResult = await this.executeSwapWithBalanceCheck(
+                'GALA|Unit|none|none',
+                symbolData.gala_symbol,
+                tradeAmount,
+                { sendNotification: sendNotifications }
+              );
+            }
+
+            if (tradeResult && tradeResult.success) {
+              result.tradesExecuted++;
+              this.logger.info(`✅ Trade executed successfully for ${symbolData.symbol}`);
+            } else {
+              this.logger.error(`❌ Trade failed for ${symbolData.symbol}:`, tradeResult?.error);
+            }
+
+            result.tradeResults.push({
+              symbol: symbolData.symbol,
+              signal: analysis.signal,
+              confidence: analysis.confidence,
+              trade: tradeResult
+            });
+
+          } else {
+            this.logger.info(`📉 No trade signal for ${symbolData.symbol} - Signal: ${analysis.signal}, Confidence: ${(analysis.confidence * 100).toFixed(1)}%`);
+          }
+
+        } catch (error) {
+          this.logger.error(`❌ Error analyzing ${symbolData.symbol}:`, error);
+          result.errors.push({
+            symbol: symbolData.symbol,
+            error: error.message
+          });
+        }
+      }
+
+      result.success = true;
+      result.message = `Automated trading completed - ${result.tradesExecuted} trades executed`;
+
+      this.logger.info(`🎉 Automated trading completed - ${result.tradesExecuted} trades executed out of ${symbolsToAnalyze.length} symbols analyzed`);
+
+      // Send summary notification if requested
+      if (sendNotifications) {
+        try {
+          const notificationService = require('./ServiceManager').get('notification');
+          if (notificationService) {
+            await notificationService.sendTradingSummary(result);
+          }
+        } catch (error) {
+          this.logger.error('Failed to send trading summary notification:', error);
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      this.logger.error('Error in automated trading:', error);
+      result.error = error.message;
+      return result;
+    }
   }
 }
 

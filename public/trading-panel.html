@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Gala Trading Bot - Control Panel</title>
+    <link rel='stylesheet' href='/stylesheets/style.css' />
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f5f5f5;
+      }
+      .container {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+      }
+      .button {
+        background-color: #4CAF50;
+        border: none;
+        color: white;
+        padding: 10px 20px;
+        text-align: center;
+        text-decoration: none;
+        display: inline-block;
+        font-size: 16px;
+        margin: 4px 2px;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      .button:hover {
+        background-color: #45a049;
+      }
+      .button.danger {
+        background-color: #f44336;
+      }
+      .button.danger:hover {
+        background-color: #da190b;
+      }
+      .form-group {
+        margin-bottom: 15px;
+      }
+      .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      .form-group input, .form-group select {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        box-sizing: border-box;
+      }
+      #results {
+        background-color: #f9f9f9;
+        border: 1px solid #ddd;
+        padding: 15px;
+        border-radius: 4px;
+        font-family: monospace;
+        white-space: pre-wrap;
+        max-height: 400px;
+        overflow-y: auto;
+      }
+      .status-indicator {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        margin-right: 8px;
+      }
+      .status-success { background-color: #4CAF50; }
+      .status-error { background-color: #f44336; }
+      .status-warning { background-color: #ff9800; }
+    </style>
+  </head>
+  <body>
+    <h1>🚀 Gala Trading Bot - Control Panel</h1>
+    
+    <!-- Balance Check Section -->
+    <div class="container">
+      <h2>💰 Account Balance</h2>
+      <button class="button" onclick="checkGalaBalance()">Check GALA Balance</button>
+      <button class="button" onclick="getAllBalances()">Get All Token Balances</button>
+      <div id="balance-result"></div>
+    </div>
+
+    <!-- Manual Trading Section -->
+    <div class="container">
+      <h2>🔄 Manual Trading</h2>
+      <div class="form-group">
+        <label for="fromToken">From Token (GALA format):</label>
+        <input type="text" id="fromToken" value="GALA|Unit|none|none" placeholder="GALA|Unit|none|none">
+      </div>
+      <div class="form-group">
+        <label for="toToken">To Token (GALA format):</label>
+        <input type="text" id="toToken" value="GUSDC|Unit|none|none" placeholder="GUSDC|Unit|none|none">
+      </div>
+      <div class="form-group">
+        <label for="amount">Amount:</label>
+        <input type="number" id="amount" value="10" step="0.01" min="0.01">
+      </div>
+      <div class="form-group">
+        <label>
+          <input type="checkbox" id="dryRun" checked> Dry Run Mode (Recommended)
+        </label>
+      </div>
+      <button class="button" onclick="executeSwap()">🧪 Execute Swap (Dry Run)</button>
+      <button class="button danger" onclick="executeSwap(false)">💰 Execute Live Swap</button>
+    </div>
+
+    <!-- Results Section -->
+    <div class="container">
+      <h2>📊 Results</h2>
+      <div id="results">Click buttons above to see results...</div>
+    </div>
+
+    <script>
+      function updateResults(data, title = 'Result') {
+        const resultsDiv = document.getElementById('results');
+        const timestamp = new Date().toLocaleTimeString();
+        resultsDiv.textContent = `[${timestamp}] ${title}:\n` + JSON.stringify(data, null, 2) + '\n\n' + resultsDiv.textContent;
+      }
+
+      async function checkGalaBalance() {
+        try {
+          const response = await fetch('/users/get-gala-balance');
+          const data = await response.json();
+          
+          const balanceDiv = document.getElementById('balance-result');
+          if (data.success) {
+            balanceDiv.innerHTML = `
+              <p><span class="status-indicator status-success"></span>
+              <strong>GALA Balance: ${data.gala_balance} GALA</strong></p>
+              <p>${data.message}</p>
+            `;
+          } else {
+            balanceDiv.innerHTML = `
+              <p><span class="status-indicator status-error"></span>
+              <strong>Error:</strong> ${data.error}</p>
+            `;
+          }
+          
+          updateResults(data, 'GALA Balance Check');
+        } catch (error) {
+          updateResults({error: error.message}, 'GALA Balance Check Error');
+        }
+      }
+
+      async function getAllBalances() {
+        try {
+          const response = await fetch('/users/get-balance');
+          const data = await response.json();
+          
+          const balanceDiv = document.getElementById('balance-result');
+          if (data.assets) {
+            let html = `<p><span class="status-indicator status-success"></span><strong>Found ${data.asset_count} tokens:</strong></p><ul>`;
+            data.assets.tokens.forEach(token => {
+              html += `<li><strong>${token.symbol}:</strong> ${token.quantity} (${token.name})</li>`;
+            });
+            html += '</ul>';
+            balanceDiv.innerHTML = html;
+          }
+          
+          updateResults(data, 'All Balances');
+        } catch (error) {
+          updateResults({error: error.message}, 'All Balances Error');
+        }
+      }
+
+      async function executeSwap(forceDryRun = null) {
+        const fromToken = document.getElementById('fromToken').value;
+        const toToken = document.getElementById('toToken').value;
+        const amount = document.getElementById('amount').value;
+        const dryRun = forceDryRun !== null ? forceDryRun : document.getElementById('dryRun').checked;
+
+        if (!fromToken || !toToken || !amount) {
+          alert('Please fill in all fields');
+          return;
+        }
+
+        if (!dryRun && !confirm('Are you sure you want to execute a LIVE trade? This will use real tokens!')) {
+          return;
+        }
+
+        try {
+          const response = await fetch('/users/execute-swap', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              fromToken,
+              toToken,
+              amount: parseFloat(amount),
+              dryRun
+            })
+          });
+
+          const data = await response.json();
+          
+          const title = dryRun ? 'Swap Execution (Dry Run)' : 'Swap Execution (LIVE)';
+          updateResults(data, title);
+
+          if (data.success) {
+            alert(`${dryRun ? 'Dry run' : 'Live trade'} completed successfully!`);
+          } else {
+            alert(`${dryRun ? 'Dry run' : 'Live trade'} failed: ${data.error}`);
+          }
+
+        } catch (error) {
+          updateResults({error: error.message}, 'Swap Execution Error');
+          alert('Error executing swap: ' + error.message);
+        }
+      }
+
+      // Auto-update dry run button text
+      document.getElementById('dryRun').addEventListener('change', function() {
+        const button = document.querySelector('.button[onclick="executeSwap()"]');
+        if (this.checked) {
+          button.textContent = '🧪 Execute Swap (Dry Run)';
+          button.className = 'button';
+        } else {
+          button.textContent = '💰 Execute Swap (LIVE)';
+          button.className = 'button danger';
+        }
+      });
+
+      // Load balance on page load
+      window.addEventListener('load', function() {
+        checkGalaBalance();
+      });
+    </script>
+  </body>
+</html>
