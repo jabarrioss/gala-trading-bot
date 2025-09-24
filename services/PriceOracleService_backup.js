@@ -1,11 +1,26 @@
 /**
- * Class to fetch price data from Gala Exchange API
- */
+ * Class to fetch price data from Gala       if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Cache the response
+      this.cache[cacheKey] = {
+        data,
+        timestamp: Date.now()
+      };
+
+      return data;
+    } catch (error) {
+      this.logger.error(`Failed to fetch price for ${symbol} (API symbol: ${apiSymbol}): ${error.message}`, error);
+      throw error;
+    }
+  }
 const ORACLE_URL = 'https://dex-backend-prod1.defi.gala.com/price-oracle/fetch-price';
 
 const BaseService = require('./BaseService');
 const ConfigManager = require('../config/ConfigManager');
-
 class PriceOracleService extends BaseService {
   constructor() {
     super();
@@ -70,28 +85,43 @@ class PriceOracleService extends BaseService {
    */
   async getCurrentPrice(galaSymbol, useCache = true) {
     try {
-      const priceData = await this.fetchPrice(galaSymbol);
-      
-      if (!priceData || !priceData.data || !priceData.data.data || priceData.data.data.length === 0) {
-        throw new Error('No price data available');
+      // Check for null or undefined gala_symbol
+      if (!galaSymbol) {
+        return {
+          success: false,
+          error: 'gala_symbol is null or undefined',
+          symbol: galaSymbol
+        };
       }
 
-      const currentPrice = parseFloat(priceData.data.data[0].price);
+      // Use the full gala_symbol format directly
+      const data = await this.fetchPrice(galaSymbol);
+      
+      if (!data || !data.data || data.data.length === 0) {
+        return {
+          success: false,
+          error: `No price data found for ${galaSymbol}`,
+          symbol: galaSymbol
+        };
+      }
+
+      const priceData = data.data[0];
       
       return {
         success: true,
-        price: currentPrice,
-        regularMarketPrice: currentPrice,
-        previousClose: parseFloat(priceData.data.data[0].price), // Oracle doesn't provide previous close
+        symbol: galaSymbol,
+        price: parseFloat(priceData.price),
+        previousClose: parseFloat(priceData.price), // Oracle doesn't provide previous close
         change: 0, // Oracle doesn't provide change data
         changePercent: 0, // Oracle doesn't provide change percentage
         volume: 0, // Oracle doesn't provide volume
         marketCap: 0, // Oracle doesn't provide market cap
-        symbol: galaSymbol,
-        timestamp: Date.now()
+        timestamp: priceData.createdAt || new Date().toISOString(),
+        rawData: priceData
       };
+
     } catch (error) {
-      this.logger.error(`Failed to get current price for ${galaSymbol}: ${error.message}`, error);
+      this.logger.error(`Failed to get current price for ${galaSymbol}:`, error);
       return {
         success: false,
         error: error.message,
@@ -121,6 +151,7 @@ class PriceOracleService extends BaseService {
         };
       }
 
+      // Use the full gala_symbol format directly
       // Calculate start date
       const endDate = new Date();
       const startDate = new Date();
@@ -145,7 +176,7 @@ class PriceOracleService extends BaseService {
 
       const data = await response.json();
       
-      if (!data || !data.data || !data.data.data || data.data.data.length === 0) {
+      if (!data || !data.data || data.data.length === 0) {
         return {
           success: false,
           error: `No historical data found for ${galaSymbol}`,
@@ -153,26 +184,26 @@ class PriceOracleService extends BaseService {
         };
       }
 
-      // Convert to Yahoo Finance format for compatibility
+      // Convert to format expected by Golden Cross analysis
       // Note: Oracle data might be limited, so we'll work with what we have
-      const historicalData = data.data.data.map(item => ({
-        date: new Date(item.timestamp || item.createdAt || Date.now()),
-        open: parseFloat(item.price),
-        high: parseFloat(item.price),
-        low: parseFloat(item.price),
-        close: parseFloat(item.price),
-        adjClose: parseFloat(item.price),
-        volume: 0 // Oracle doesn't provide volume
-      }));
+      const prices = data.data.map(item => parseFloat(item.price)).reverse(); // Newest first
+      
+      if (prices.length < 50) {
+        this.logger.warn(`Limited historical data for ${galaSymbol}: only ${prices.length} data points`);
+      }
 
       return {
         success: true,
-        data: historicalData,
         symbol: galaSymbol,
-        count: historicalData.length
+        prices: prices,
+        count: prices.length,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        rawData: data.data
       };
+
     } catch (error) {
-      this.logger.error(`Failed to get Golden Cross data for ${galaSymbol}: ${error.message}`, error);
+      this.logger.error(`Failed to get Golden Cross data for ${galaSymbol}:`, error);
       return {
         success: false,
         error: error.message,

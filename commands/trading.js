@@ -23,15 +23,15 @@ async function initializeServices() {
 
 async function runTradingAnalysis(symbol = null) {
   try {
-    const yahooService = serviceManager.get('yahooFinance');
+    const priceOracleService = serviceManager.get('priceOracle');
     const tradingService = serviceManager.get('trading');
     const databaseService = serviceManager.get('database');
     // const binanceService = serviceManager.get('binance');
 
-    // // Ensure services are initialized
-    // if (!yahooService || !tradingService || !databaseService || !binanceService) {
-    //   throw new Error('Required services are not available');
-    // }
+    // Ensure services are initialized
+    if (!priceOracleService || !tradingService || !databaseService) {
+      throw new Error('Required services are not available');
+    }
     
     const analysisResults = {};
 
@@ -46,23 +46,27 @@ async function runTradingAnalysis(symbol = null) {
         return null;
       }
 
+      if (!symbolData.gala_symbol) {
+        console.error(`❌ Symbol ${symbol} has no gala_symbol configured`);
+        return null;
+      }
+
       // Get historical data for Golden Cross analysis
-      const historicalData = await yahooService.getGoldenCrossData(symbolData.yahoo_symbol, {
+      const historicalData = await priceOracleService.getGoldenCrossData(symbolData.gala_symbol, {
         lookbackDays: 250
       });
-      /*binance_symbol = symbolData.yahoo_symbol + 'USDT';
-      const historicalData = await binanceService.getGoldenCrossData(symbolData.yahoo_symbol, {
-        lookbackDays: 250
-      });*/
 
       if (!historicalData.success) {
         console.error(`❌ Failed to fetch historical data for ${symbol}:`, historicalData.error);
         return null;
       }
 
+      // Extract prices from historical data for analysis
+      const prices = historicalData.data.map(item => item.close);
+      
       // Analyze using Golden Cross strategy
       const analysis = tradingService.analyzeGoldenCrossStrategy(
-        historicalData.prices,
+        prices,
         symbolData.strategy_config?.golden_cross || {
           shortPeriod: 50,
           longPeriod: 200,
@@ -71,7 +75,7 @@ async function runTradingAnalysis(symbol = null) {
       );
 
       // Get current price for context
-      const currentPrice = await yahooService.getCurrentPrice(symbolData.yahoo_symbol);
+      const currentPrice = await priceOracleService.getCurrentPrice(symbolData.gala_symbol);
 
       analysisResults[symbol] = {
         analysis,
@@ -105,24 +109,41 @@ async function runTradingAnalysis(symbol = null) {
         try {
           console.log(`   Analyzing ${symbolData.symbol}...`);
           
+          // Skip symbols without gala_symbol
+          if (!symbolData.gala_symbol) {
+            console.log(`   ⚠️ Skipping ${symbolData.symbol}: no gala_symbol configured`);
+            analysisResults[symbolData.symbol] = {
+              success: false,
+              error: 'No gala_symbol configured',
+              details: 'This symbol requires gala_symbol to be set for price oracle integration'
+            };
+            continue;
+          }
+          
           // Get historical data for Golden Cross analysis
-          const historicalData = await yahooService.getGoldenCrossData(symbolData.yahoo_symbol, {
+          const historicalData = await priceOracleService.getGoldenCrossData(symbolData.gala_symbol, {
             lookbackDays: 250
           });
 
           if (!historicalData.success) {
             console.error(`   ❌ Failed to fetch data for ${symbolData.symbol}: ${historicalData.error}`);
+            
+            // For now, create a placeholder analysis indicating data unavailable
             analysisResults[symbolData.symbol] = {
               success: false,
-              error: 'Failed to fetch historical data',
-              details: historicalData.error
+              error: 'Price oracle data unavailable',
+              details: historicalData.error,
+              note: 'The Gala price oracle may not have data for this token, or the API may be experiencing issues'
             };
             continue;
           }
 
+          // Extract prices from historical data for analysis
+          const prices = historicalData.data.map(item => item.close);
+          
           // Analyze using Golden Cross strategy
           const analysis = tradingService.analyzeGoldenCrossStrategy(
-            historicalData.prices,
+            prices,
             symbolData.strategy_config?.golden_cross || {
               shortPeriod: 50,
               longPeriod: 200,
@@ -131,7 +152,7 @@ async function runTradingAnalysis(symbol = null) {
           );
 
           // Get current price for context
-          const currentPrice = await yahooService.getCurrentPrice(symbolData.yahoo_symbol);
+          const currentPrice = await priceOracleService.getCurrentPrice(symbolData.gala_symbol);
 
           analysisResults[symbolData.symbol] = {
             success: true,

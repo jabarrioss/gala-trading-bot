@@ -72,17 +72,17 @@ class PriceOracleService extends BaseService {
     try {
       const priceData = await this.fetchPrice(galaSymbol);
       
-      if (!priceData || !priceData.data || !priceData.data.data || priceData.data.data.length === 0) {
+      if (!priceData || !priceData.data || priceData.data.length === 0) {
         throw new Error('No price data available');
       }
 
-      const currentPrice = parseFloat(priceData.data.data[0].price);
+      const currentPrice = parseFloat(priceData.data[0].price);
       
       return {
         success: true,
         price: currentPrice,
         regularMarketPrice: currentPrice,
-        previousClose: parseFloat(priceData.data.data[0].price), // Oracle doesn't provide previous close
+        previousClose: parseFloat(priceData.data[0].price), // Oracle doesn't provide previous close
         change: 0, // Oracle doesn't provide change data
         changePercent: 0, // Oracle doesn't provide change percentage
         volume: 0, // Oracle doesn't provide volume
@@ -145,7 +145,7 @@ class PriceOracleService extends BaseService {
 
       const data = await response.json();
       
-      if (!data || !data.data || !data.data.data || data.data.data.length === 0) {
+      if (!data || !data.data || data.data.length === 0) {
         return {
           success: false,
           error: `No historical data found for ${galaSymbol}`,
@@ -155,7 +155,7 @@ class PriceOracleService extends BaseService {
 
       // Convert to Yahoo Finance format for compatibility
       // Note: Oracle data might be limited, so we'll work with what we have
-      const historicalData = data.data.data.map(item => ({
+      const historicalData = data.data.map(item => ({
         date: new Date(item.timestamp || item.createdAt || Date.now()),
         open: parseFloat(item.price),
         high: parseFloat(item.price),
