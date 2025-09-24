@@ -8,7 +8,12 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "lint": "echo 'Linting not configured yet'"
+    "lint": "echo 'Linting not configured yet'",
+    "trading": "node commands/trading.js",
+    "analyze": "node commands/trading.js analyze",
+    "trade": "node commands/trading.js trade",
+    "monitor": "node commands/trading.js monitor",
+    "playground": "node commands/playground.js"
   },
   "dependencies": {
     "@gala-chain/gswap-sdk": "^0.0.7",
