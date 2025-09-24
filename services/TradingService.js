@@ -212,7 +212,12 @@ class TradingService extends BaseService {
       GSwap.events.disconnectEventSocket();
       this.logger.info('Disconnected from GSwap event socket');
     } catch (error) {
-      this.logger.error('Failed to disconnect from GSwap event socket:', error);
+      // Ignore specific transaction waiter errors as they're not critical
+      if (error.code === 'TRANSACTION_WAIT_FAILED' && error.details?.message === 'Transaction waiter disabled') {
+        this.logger.debug('Event socket already disconnected or transaction waiter disabled');
+      } else {
+        this.logger.error('Failed to disconnect from GSwap event socket:', error);
+      }
     }
   }
 
@@ -533,9 +538,12 @@ class TradingService extends BaseService {
       }
 
       // Execute actual swap
-      await this.connectEventSocket();
+      let eventSocketConnected = false;
       
       try {
+        await this.connectEventSocket();
+        eventSocketConnected = true;
+        
         const pendingTx = await this.gSwap.swaps.swap(
           fromToken,
           toToken,
@@ -583,11 +591,23 @@ class TradingService extends BaseService {
         };
 
       } finally {
-        await this.disconnectEventSocket();
+        // Only disconnect if we successfully connected
+        if (eventSocketConnected) {
+          await this.disconnectEventSocket();
+        }
       }
 
     } catch (error) {
       this.logger.error('Error executing swap:', error);
+      
+      // Clean up event socket connection if needed
+      try {
+        if (eventSocketConnected) {
+          await this.disconnectEventSocket();
+        }
+      } catch (cleanupError) {
+        this.logger.debug('Event socket cleanup error (non-critical):', cleanupError.message);
+      }
       
       // Log failed trade
       try {
@@ -1000,7 +1020,11 @@ class TradingService extends BaseService {
 
       // Step 5: Send notification
       if (sendNotification) {
-        await this.sendSwapNotification(swapResult);
+        try {
+          await this.sendSwapNotification(swapResult);
+        } catch (notificationError) {
+          this.logger.warn('Failed to send swap notification:', notificationError.message);
+        }
       }
 
       return swapResult;
@@ -1011,7 +1035,11 @@ class TradingService extends BaseService {
       swapResult.error = error.message;
       
       if (sendNotification) {
-        await this.sendSwapNotification(swapResult);
+        try {
+          await this.sendSwapNotification(swapResult);
+        } catch (notificationError) {
+          this.logger.warn('Failed to send error notification:', notificationError.message);
+        }
       }
       
       return swapResult;
