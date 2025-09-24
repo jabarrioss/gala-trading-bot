@@ -7,9 +7,9 @@ const yahooFinance = require('yahoo-finance2').default;
 class YahooFinanceService extends BaseService {
   constructor() {
     super('YahooFinanceService');
-    this.symbol = 'GALA-USD';
     this.cache = new Map();
     this.cacheTimeout = 60000; // 1 minute cache timeout
+    this.databaseService = null;
   }
 
   /**
@@ -17,19 +17,48 @@ class YahooFinanceService extends BaseService {
    */
   async onInit() {
     try {
-      this.symbol = this.config.get('YAHOO_SYMBOL', 'GALA-USD');
       this.cacheTimeout = parseInt(this.config.get('PRICE_CACHE_TIMEOUT_MS', '60000'));
 
       this.logger.info('Yahoo Finance service configuration:', {
-        symbol: this.symbol,
         cacheTimeout: this.cacheTimeout
       });
 
-      // Test connection by fetching current quote
-      await this.getCurrentPrice();
+      // Test connection by fetching current price for GALA-USD (default)
+      // We'll test with other symbols later when they're available
+      await this.getCurrentPrice('GALA-USD');
       
     } catch (error) {
       this.logger.error('Failed to initialize YahooFinanceService:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get database service (lazy initialization)
+   * @returns {DatabaseService} Database service instance
+   */
+  getDatabaseService() {
+    if (!this.databaseService) {
+      const { ServiceManager } = require('./ServiceManager');
+      this.databaseService = ServiceManager.getService('DatabaseService');
+      
+      if (!this.databaseService) {
+        throw new Error('DatabaseService not available');
+      }
+    }
+    return this.databaseService;
+  }
+
+  /**
+   * Get active symbols from database
+   * @returns {Promise<Array>} Array of active symbols
+   */
+  async getActiveSymbols() {
+    try {
+      const databaseService = this.getDatabaseService();
+      return await databaseService.getMonitoredSymbols(true);
+    } catch (error) {
+      this.logger.error('Error getting active symbols:', error);
       throw error;
     }
   }
@@ -54,30 +83,31 @@ class YahooFinanceService extends BaseService {
   }
 
   /**
-   * Get current price quote for GALA
+   * Get current price quote for a symbol
+   * @param {string} yahooSymbol - Yahoo Finance symbol (e.g., 'GALA-USD')
    * @param {boolean} useCache - Whether to use cache (default: true)
    * @returns {Object} - Price information
    */
-  async getCurrentPrice(useCache = true) {
-    const cacheKey = this.getCacheKey('getCurrentPrice');
+  async getCurrentPrice(yahooSymbol = 'GALA-USD', useCache = true) {
+    const cacheKey = this.getCacheKey('getCurrentPrice', { symbol: yahooSymbol });
     
     try {
       // Check cache first
       if (useCache) {
         const cached = this.cache.get(cacheKey);
         if (this.isCacheValid(cached)) {
-          this.logger.debug('Returning cached price data');
+          this.logger.debug(`Returning cached price data for ${yahooSymbol}`);
           return cached.data;
         }
       }
 
-      this.logger.debug(`Fetching current price for ${this.symbol}`);
+      this.logger.debug(`Fetching current price for ${yahooSymbol}`);
       
-      const quote = await yahooFinance.quote(this.symbol);
+      const quote = await yahooFinance.quote(yahooSymbol);
       
       const result = {
         success: true,
-        symbol: this.symbol,
+        symbol: yahooSymbol,
         price: quote.regularMarketPrice,
         previousClose: quote.regularMarketPreviousClose,
         change: quote.regularMarketChange,
@@ -114,11 +144,12 @@ class YahooFinanceService extends BaseService {
   }
 
   /**
-   * Get historical price data
+   * Get historical price data for a symbol
+   * @param {string} yahooSymbol - Yahoo Finance symbol (e.g., 'GALA-USD')
    * @param {Object} options - Options for historical data
    * @returns {Object} - Historical price data
    */
-  async getHistoricalData(options = {}) {
+  async getHistoricalData(yahooSymbol = 'GALA-USD', options = {}) {
     const {
       period1 = '2024-01-01', // Start date
       period2 = new Date().toISOString().split('T')[0], // End date (today)
@@ -126,25 +157,25 @@ class YahooFinanceService extends BaseService {
       useCache = true
     } = options;
 
-    const cacheKey = this.getCacheKey('getHistoricalData', { period1, period2, interval });
+    const cacheKey = this.getCacheKey('getHistoricalData', { symbol: yahooSymbol, period1, period2, interval });
 
     try {
       // Check cache first (longer cache for historical data)
       if (useCache) {
         const cached = this.cache.get(cacheKey);
         if (this.isCacheValid(cached)) {
-          this.logger.debug('Returning cached historical data');
+          this.logger.debug(`Returning cached historical data for ${yahooSymbol}`);
           return cached.data;
         }
       }
 
-      this.logger.debug(`Fetching historical data for ${this.symbol}`, {
+      this.logger.debug(`Fetching historical data for ${yahooSymbol}`, {
         period1,
         period2,
         interval
       });
 
-      const history = await yahooFinance.historical(this.symbol, {
+      const history = await yahooFinance.historical(yahooSymbol, {
         period1,
         period2,
         interval
@@ -207,10 +238,11 @@ class YahooFinanceService extends BaseService {
 
   /**
    * Get historical data suitable for Golden Cross analysis
+   * @param {string} yahooSymbol - Yahoo Finance symbol (e.g., 'GALA-USD')
    * @param {Object} options - Options
    * @returns {Object} - Historical data with sufficient lookback
    */
-  async getGoldenCrossData(options = {}) {
+  async getGoldenCrossData(yahooSymbol = 'GALA-USD', options = {}) {
     const {
       lookbackDays = 250, // Need at least 200 days for 200-day MA + buffer
       interval = '1d'
@@ -220,7 +252,7 @@ class YahooFinanceService extends BaseService {
     const startDate = new Date();
     startDate.setDate(endDate.getDate() - lookbackDays);
 
-    return await this.getHistoricalData({
+    return await this.getHistoricalData(yahooSymbol, {
       period1: startDate.toISOString().split('T')[0],
       period2: endDate.toISOString().split('T')[0],
       interval,
@@ -326,17 +358,119 @@ class YahooFinanceService extends BaseService {
   }
 
   /**
+   * Get current prices for all monitored symbols
+   * @param {boolean} useCache - Whether to use cache (default: true)
+   * @returns {Object} - Map of symbol to price data
+   */
+  async getAllCurrentPrices(useCache = true) {
+    try {
+      const symbols = await this.getActiveSymbols();
+      const prices = {};
+      
+      // Fetch prices for all symbols concurrently
+      const pricePromises = symbols.map(async (symbolData) => {
+        try {
+          const priceData = await this.getCurrentPrice(symbolData.yahoo_symbol, useCache);
+          prices[symbolData.symbol] = {
+            ...priceData,
+            displayName: symbolData.display_name,
+            symbolData
+          };
+        } catch (error) {
+          this.logger.error(`Error fetching price for ${symbolData.symbol}:`, error);
+          prices[symbolData.symbol] = {
+            success: false,
+            error: error.message,
+            symbolData
+          };
+        }
+      });
+
+      await Promise.all(pricePromises);
+      
+      return {
+        success: true,
+        prices,
+        count: Object.keys(prices).length,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error('Error getting all current prices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get historical data for all monitored symbols
+   * @param {Object} options - Options for historical data
+   * @returns {Object} - Map of symbol to historical data
+   */
+  async getAllHistoricalData(options = {}) {
+    try {
+      const symbols = await this.getActiveSymbols();
+      const historicalData = {};
+      
+      // Fetch historical data for all symbols concurrently
+      const dataPromises = symbols.map(async (symbolData) => {
+        try {
+          const data = await this.getHistoricalData(symbolData.yahoo_symbol, options);
+          historicalData[symbolData.symbol] = {
+            ...data,
+            displayName: symbolData.display_name,
+            symbolData
+          };
+        } catch (error) {
+          this.logger.error(`Error fetching historical data for ${symbolData.symbol}:`, error);
+          historicalData[symbolData.symbol] = {
+            success: false,
+            error: error.message,
+            symbolData
+          };
+        }
+      });
+
+      await Promise.all(dataPromises);
+      
+      return {
+        success: true,
+        data: historicalData,
+        count: Object.keys(historicalData).length,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error('Error getting all historical data:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get service status
    * @returns {Object} - Service status
    */
-  getStatus() {
-    return {
-      serviceName: this.serviceName,
-      isInitialized: this.isInitialized,
-      symbol: this.symbol,
-      cacheTimeout: this.cacheTimeout,
-      cacheStats: this.getCacheStats()
-    };
+  async getStatus() {
+    try {
+      const activeSymbols = await this.getActiveSymbols();
+      
+      return {
+        serviceName: this.serviceName,
+        isInitialized: this.isInitialized,
+        cacheTimeout: this.cacheTimeout,
+        activeSymbols: activeSymbols.map(s => ({
+          symbol: s.symbol,
+          yahoo_symbol: s.yahoo_symbol,
+          display_name: s.display_name
+        })),
+        cacheStats: this.getCacheStats()
+      };
+    } catch (error) {
+      return {
+        serviceName: this.serviceName,
+        isInitialized: this.isInitialized,
+        cacheTimeout: this.cacheTimeout,
+        error: error.message,
+        cacheStats: this.getCacheStats()
+      };
+    }
   }
 }
 

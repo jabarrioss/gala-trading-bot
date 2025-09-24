@@ -143,17 +143,21 @@ serviceManager.register('yahooFinance', new YahooFinanceService(), 20); // Data 
 serviceManager.register('notification', new NotificationService(), 30); // Notification service
 serviceManager.register('trading', new TradingService(), 40); // Trading service (depends on others)
 
-// Setup graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Received SIGINT, shutting down gracefully...');
-  await serviceManager.shutdownAll();
-  process.exit(0);
-});
+// Setup graceful shutdown (only in production or when explicitly enabled)
+if (process.env.NODE_ENV === 'production' || process.env.ENABLE_SIGNAL_HANDLERS === 'true') {
+  process.on('SIGINT', async () => {
+    console.log('\n🛑 Received SIGINT, shutting down gracefully...');
+    await serviceManager.shutdownAll();
+    process.exit(0);
+  });
 
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 Received SIGTERM, shutting down gracefully...');
-  await serviceManager.shutdownAll();
-  process.exit(0);
-});
+  process.on('SIGTERM', async () => {
+    console.log('\n🛑 Received SIGTERM, shutting down gracefully...');
+    await serviceManager.shutdownAll();
+    process.exit(0);
+  });
+
+  console.log('🔒 Signal handlers registered for graceful shutdown');
+}
 
 module.exports = serviceManager;
