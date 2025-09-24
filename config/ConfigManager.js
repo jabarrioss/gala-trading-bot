@@ -40,6 +40,7 @@ class ConfigManager {
       PRICE_CACHE_TIMEOUT_MS: parseInt(process.env.PRICE_CACHE_TIMEOUT_MS) || 60000,
 
       // External APIs
+      COINMARKETCAP_API_KEY: process.env.COINMARKETCAP_API_KEY,
       DISCORD_WEBHOOK_URL: process.env.DISCORD_WEBHOOK_URL,
       NOTIFICATION_MIN_INTERVAL_MS: parseInt(process.env.NOTIFICATION_MIN_INTERVAL_MS) || 1000,
 

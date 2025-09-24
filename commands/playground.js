@@ -11,7 +11,7 @@ async function runPlayground() {
 
   // Test fetching GALA data
   try {
-    const galaData = await cmcService.getCryptoData('GALA');
+    const galaData = await cmcService.getCryptoData('ETIME');
     console.log('GALA Data:', galaData);
   } catch (error) {
     console.error('Error fetching GALA data:', error);

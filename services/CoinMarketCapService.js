@@ -12,9 +12,9 @@ class CoinMarketCapService extends BaseService {
   }
 
   async init() {
-    const config = await ConfigManager.getInstance();
+    ConfigManager.init();
     
-    this.apiKey = config.get('COINMARKETCAP_API_KEY');
+    this.apiKey = ConfigManager.get('COINMARKETCAP_API_KEY');
     if (!this.apiKey) {
       throw new Error('CoinMarketCap API key not configured');
     }
@@ -73,19 +73,19 @@ class CoinMarketCapService extends BaseService {
       }
 
       const data = await response.json();
-      const galaData = data.data.GALA;
+      const cryptoData = data.data[symbol];
 
       return {
-        price: galaData.quote.USD.price,
-        marketCap: galaData.quote.USD.market_cap,
-        volume24h: galaData.quote.USD.volume_24h,
-        percentChange1h: galaData.quote.USD.percent_change_1h,
-        percentChange24h: galaData.quote.USD.percent_change_24h,
-        percentChange7d: galaData.quote.USD.percent_change_7d,
-        lastUpdated: galaData.last_updated
+        price: cryptoData.quote.USD.price,
+        marketCap: cryptoData.quote.USD.market_cap,
+        volume24h: cryptoData.quote.USD.volume_24h,
+        percentChange1h: cryptoData.quote.USD.percent_change_1h,
+        percentChange24h: cryptoData.quote.USD.percent_change_24h,
+        percentChange7d: cryptoData.quote.USD.percent_change_7d,
+        lastUpdated: cryptoData.last_updated
       };
     } catch (error) {
-      // this.logger.error('Failed to fetch GALA data from CoinMarketCap:', error);
+      // this.logger.error(`Failed to fetch ${symbol} data from CoinMarketCap:`, error);
       throw error;
     }
   }
