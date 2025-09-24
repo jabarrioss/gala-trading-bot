@@ -204,6 +204,120 @@ class PriceOracleService extends BaseService {
   }
 
   /**
+   * Get historical data for DCA (Dollar Cost Averaging) analysis
+   * @param {string} galaSymbol - Gala symbol format (e.g., 'GALA|Unit|none|none')
+   * @param {Object} options - Options for DCA analysis
+   * @returns {Object} - Historical data for DCA calculations
+   */
+  async getDCAData(galaSymbol, options = {}) {
+    const {
+      lookbackDays = 365,
+      interval = 'daily' // daily, weekly, monthly
+    } = options;
+
+    try {
+      // Check for null or undefined gala_symbol
+      if (!galaSymbol) {
+        return {
+          success: false,
+          error: 'gala_symbol is null or undefined',
+          symbol: galaSymbol
+        };
+      }
+
+      // Calculate start date
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(endDate.getDate() - lookbackDays);
+
+      // Convert pipe symbols to dollar symbols for API calls
+      const apiSymbol = galaSymbol.replace(/\|/g, '$');
+      
+      // Fetch historical data for DCA analysis
+      const allData = [];
+      const maxPages = Math.ceil(lookbackDays / 50); // Estimate pages needed
+      const limit = 50; // Maximum allowed per page
+      
+      for (let page = 1; page <= maxPages; page++) {
+        const params = new URLSearchParams({
+          token: apiSymbol,
+          page: page,
+          limit: limit,
+          from: startDate.toISOString()
+        });
+
+        const response = await fetch(`${ORACLE_URL}?${params}`);
+        
+        if (!response.ok) {
+          this.logger.warn(`Failed to fetch DCA page ${page} for ${galaSymbol}: HTTP ${response.status}`);
+          break;
+        }
+
+        const pageData = await response.json();
+        
+        if (!pageData || !pageData.data || !pageData.data.data || pageData.data.data.length === 0) {
+          this.logger.warn(`No DCA data on page ${page} for ${galaSymbol}`);
+          break;
+        }
+        
+        allData.push(...pageData.data.data);
+        
+        if (pageData.data.data.length < limit) {
+          break;
+        }
+      }
+      
+      if (allData.length === 0) {
+        return {
+          success: false,
+          error: `No DCA historical data found for ${galaSymbol}`,
+          symbol: galaSymbol
+        };
+      }
+
+      // Sort by date (oldest first)
+      const sortedData = allData.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      
+      // Convert to DCA analysis format
+      const dcaData = sortedData.map(item => ({
+        date: new Date(item.timestamp || item.createdAt || Date.now()),
+        price: parseFloat(item.price),
+        timestamp: new Date(item.timestamp || item.createdAt || Date.now()).getTime()
+      }));
+
+      // Calculate DCA metrics
+      const totalInvestment = dcaData.length * 100; // Assume $100 per period
+      const totalTokens = dcaData.reduce((sum, item) => sum + (100 / item.price), 0);
+      const averageCost = totalInvestment / totalTokens;
+      const currentValue = totalTokens * dcaData[dcaData.length - 1].price;
+      const totalReturn = currentValue - totalInvestment;
+      const returnPercentage = (totalReturn / totalInvestment) * 100;
+
+      return {
+        success: true,
+        data: dcaData,
+        symbol: galaSymbol,
+        count: dcaData.length,
+        analysis: {
+          totalInvestment,
+          totalTokens,
+          averageCost,
+          currentValue,
+          totalReturn,
+          returnPercentage,
+          interval
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Failed to get DCA data for ${galaSymbol}: ${error.message}`, error);
+      return {
+        success: false,
+        error: error.message,
+        symbol: galaSymbol
+      };
+    }
+  }
+  /**
    * Initialize the service
    */
   async init() {
