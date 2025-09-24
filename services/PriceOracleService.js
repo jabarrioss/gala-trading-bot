@@ -12,6 +12,7 @@ class PriceOracleService extends BaseService {
     this.cacheTimestamp = 0;
     this.cacheTimeout = 60000; // Default cache timeout 60 seconds
   }
+
   /**
    * Fetch the current price for a specific cryptocurrency symbol using gala_symbol
    * The ORACLE_URL is a get endpoint that accepts 4 query parameters:
@@ -22,6 +23,48 @@ class PriceOracleService extends BaseService {
    * 
    */
   async fetchPrice(symbol) {
+    try {
+      // Check cache first
+      const cacheKey = `price_${symbol}`;
+      if (this.cache[cacheKey] && (Date.now() - this.cache[cacheKey].timestamp) < this.cacheTimeout) {
+        return this.cache[cacheKey].data;
+      }
+
+      // Build query parameters
+      const params = new URLSearchParams({
+        token: symbol,
+        page: 1,
+        limit: 1
+      });
+
+      const response = await fetch(`${ORACLE_URL}?${params}`);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Cache the response
+      this.cache[cacheKey] = {
+        data,
+        timestamp: Date.now()
+      };
+
+      return data;
+    } catch (error) {
+      this.logger.error(`Failed to fetch price for ${symbol}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Initialize the service
+   */
+  async init() {
+    await super.init();
+    this.cache = {};
+    this.logger.info('PriceOracleService initialized');
   }
 }
 

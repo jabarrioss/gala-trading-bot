@@ -601,6 +601,182 @@ class DatabaseService extends BaseService {
   }
 
   /**
+   * Log a trade execution to the database
+   * @param {Object} tradeData - Trade data to log
+   * @returns {Promise<number>} - Trade ID
+   */
+  async logTrade(tradeData) {
+    const {
+      strategy,
+      symbol,
+      side,
+      amount,
+      price,
+      total_value,
+      slippage,
+      fee = 0,
+      status = 'COMPLETED',
+      tx_hash = null,
+      dry_run = false,
+      executed_at = null,
+      notes = null
+    } = tradeData;
+
+    try {
+      const sql = `
+        INSERT INTO trades (
+          strategy, symbol, side, amount, price, total_value, 
+          slippage, fee, status, tx_hash, dry_run, executed_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      const result = await this.run(sql, [
+        strategy, symbol, side, amount, price, total_value,
+        slippage, fee, status, tx_hash, dry_run ? 1 : 0, 
+        executed_at || new Date().toISOString(), notes
+      ]);
+
+      this.logger.info(`Trade logged: ${strategy} ${side} ${amount} ${symbol}`, {
+        tradeId: result.lastID,
+        status: status,
+        dryRun: dry_run
+      });
+
+      return result.lastID;
+    } catch (error) {
+      this.logger.error('Error logging trade:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the last trade execution time for a specific strategy
+   * @param {string} strategy - Strategy name (e.g., 'DCA', 'GoldenCross')
+   * @param {string} symbol - Symbol to filter by (optional)
+   * @returns {Promise<string|null>} - Last execution timestamp or null
+   */
+  async getLastTradeExecution(strategy, symbol = null) {
+    try {
+      let sql = `
+        SELECT executed_at
+        FROM trades 
+        WHERE strategy = ? AND status = 'COMPLETED'
+      `;
+      const params = [strategy];
+
+      if (symbol) {
+        sql += ' AND symbol = ?';
+        params.push(symbol);
+      }
+
+      sql += ' ORDER BY executed_at DESC LIMIT 1';
+
+      const result = await this.get(sql, params);
+      return result ? result.executed_at : null;
+    } catch (error) {
+      this.logger.error(`Error getting last trade execution for ${strategy}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get trade history for a strategy
+   * @param {string} strategy - Strategy name
+   * @param {Object} options - Query options
+   * @returns {Promise<Array>} - Array of trade records
+   */
+  async getTradeHistory(strategy, options = {}) {
+    const {
+      symbol = null,
+      limit = 100,
+      offset = 0,
+      startDate = null,
+      endDate = null,
+      status = null
+    } = options;
+
+    try {
+      let sql = 'SELECT * FROM trades WHERE strategy = ?';
+      const params = [strategy];
+
+      if (symbol) {
+        sql += ' AND symbol = ?';
+        params.push(symbol);
+      }
+
+      if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+      }
+
+      if (startDate) {
+        sql += ' AND executed_at >= ?';
+        params.push(startDate);
+      }
+
+      if (endDate) {
+        sql += ' AND executed_at <= ?';
+        params.push(endDate);
+      }
+
+      sql += ' ORDER BY executed_at DESC LIMIT ? OFFSET ?';
+      params.push(limit, offset);
+
+      return await this.all(sql, params);
+    } catch (error) {
+      this.logger.error(`Error getting trade history for ${strategy}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get trade statistics for a strategy
+   * @param {string} strategy - Strategy name
+   * @param {string} symbol - Symbol to filter by (optional)
+   * @returns {Promise<Object>} - Trade statistics
+   */
+  async getTradeStats(strategy, symbol = null) {
+    try {
+      let sql = `
+        SELECT 
+          COUNT(*) as total_trades,
+          SUM(CASE WHEN side = 'BUY' THEN 1 ELSE 0 END) as buy_trades,
+          SUM(CASE WHEN side = 'SELL' THEN 1 ELSE 0 END) as sell_trades,
+          SUM(total_value) as total_volume,
+          AVG(price) as avg_price,
+          MIN(price) as min_price,
+          MAX(price) as max_price,
+          AVG(slippage) as avg_slippage,
+          SUM(fee) as total_fees
+        FROM trades 
+        WHERE strategy = ? AND status = 'COMPLETED'
+      `;
+      const params = [strategy];
+
+      if (symbol) {
+        sql += ' AND symbol = ?';
+        params.push(symbol);
+      }
+
+      const result = await this.get(sql, params);
+      return result || {
+        total_trades: 0,
+        buy_trades: 0,
+        sell_trades: 0,
+        total_volume: 0,
+        avg_price: 0,
+        min_price: 0,
+        max_price: 0,
+        avg_slippage: 0,
+        total_fees: 0
+      };
+    } catch (error) {
+      this.logger.error(`Error getting trade stats for ${strategy}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Close database connection
    * @returns {Promise<void>}
    */

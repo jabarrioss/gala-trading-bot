@@ -194,11 +194,127 @@ function detectRSISignal(rsi, overboughtLevel = 70, oversoldLevel = 30) {
   };
 }
 
+/**
+ * Analyze DCA (Dollar Cost Averaging) strategy
+ * @param {Object} options - DCA configuration options
+ * @returns {Object} - DCA analysis result
+ */
+function analyzeDCAStrategy(options = {}) {
+  const {
+    interval = 'daily', // 'daily', 'weekly', 'monthly'
+    lastExecutionTime = null,
+    amount = 10, // Default DCA amount
+    priceThreshold = null, // Optional: only buy if price is below threshold
+    currentPrice = null,
+    volatilityWindow = 7, // Days to check for volatility
+    prices = [], // Recent prices for volatility check
+    maxVolatility = 0.1 // 10% max volatility threshold
+  } = options;
+
+  const now = new Date();
+  const intervalMs = getIntervalMs(interval);
+  
+  // Check if enough time has passed since last execution
+  const shouldExecute = !lastExecutionTime || 
+    (now.getTime() - new Date(lastExecutionTime).getTime()) >= intervalMs;
+
+  if (!shouldExecute) {
+    const timeLeft = Math.ceil((intervalMs - (now.getTime() - new Date(lastExecutionTime).getTime())) / (1000 * 60 * 60));
+    return {
+      signal: null,
+      reason: `Next DCA execution in ${timeLeft} hours`,
+      shouldExecute: false,
+      nextExecution: new Date(new Date(lastExecutionTime).getTime() + intervalMs).toISOString(),
+      confidence: 0
+    };
+  }
+
+  let signal = 'BUY'; // DCA is always buy
+  let confidence = 0.8; // Base confidence for DCA
+  let reasons = [`DCA ${interval} interval reached`];
+
+  // Check price threshold if specified
+  if (priceThreshold && currentPrice && currentPrice > priceThreshold) {
+    return {
+      signal: null,
+      reason: `Current price ${currentPrice.toFixed(4)} above threshold ${priceThreshold.toFixed(4)}`,
+      shouldExecute: false,
+      confidence: 0,
+      priceCheck: 'above_threshold'
+    };
+  }
+
+  // Check volatility if we have price history
+  if (prices && prices.length >= volatilityWindow) {
+    const recentPrices = prices.slice(0, volatilityWindow);
+    const avgPrice = recentPrices.reduce((sum, p) => sum + p, 0) / volatilityWindow;
+    const volatility = Math.sqrt(
+      recentPrices.reduce((sum, p) => sum + Math.pow(p - avgPrice, 2), 0) / volatilityWindow
+    ) / avgPrice;
+
+    if (volatility > maxVolatility) {
+      confidence *= 0.7; // Reduce confidence during high volatility
+      reasons.push(`High volatility detected: ${(volatility * 100).toFixed(2)}%`);
+    } else {
+      reasons.push(`Normal volatility: ${(volatility * 100).toFixed(2)}%`);
+    }
+  }
+
+  // Price threshold bonus
+  if (priceThreshold && currentPrice && currentPrice <= priceThreshold) {
+    confidence += 0.1; // Bonus confidence for good price
+    reasons.push(`Price ${currentPrice.toFixed(4)} below threshold ${priceThreshold.toFixed(4)}`);
+  }
+
+  return {
+    signal,
+    confidence: Math.min(confidence, 1.0),
+    reasons,
+    shouldExecute: true,
+    amount,
+    interval,
+    nextExecution: new Date(now.getTime() + intervalMs).toISOString(),
+    volatility: prices.length >= volatilityWindow ? 
+      calculateVolatility(prices.slice(0, volatilityWindow)) : null,
+    timestamp: now.toISOString()
+  };
+}
+
+/**
+ * Get interval in milliseconds
+ * @param {string} interval - Interval string ('daily', 'weekly', 'monthly')
+ * @returns {number} - Milliseconds
+ */
+function getIntervalMs(interval) {
+  const intervals = {
+    'daily': 24 * 60 * 60 * 1000,
+    'weekly': 7 * 24 * 60 * 60 * 1000,
+    'monthly': 30 * 24 * 60 * 60 * 1000
+  };
+  return intervals[interval] || intervals['daily'];
+}
+
+/**
+ * Calculate price volatility
+ * @param {number[]} prices - Array of recent prices
+ * @returns {number} - Volatility ratio
+ */
+function calculateVolatility(prices) {
+  if (prices.length < 2) return 0;
+  
+  const avg = prices.reduce((sum, p) => sum + p, 0) / prices.length;
+  const variance = prices.reduce((sum, p) => sum + Math.pow(p - avg, 2), 0) / prices.length;
+  return Math.sqrt(variance) / avg;
+}
+
 module.exports = {
   calculateSMA,
   calculateMultipleSMA,
   calculateSMAHistory,
   detectGoldenCross,
   calculateRSI,
-  detectRSISignal
+  detectRSISignal,
+  analyzeDCAStrategy,
+  getIntervalMs,
+  calculateVolatility
 };

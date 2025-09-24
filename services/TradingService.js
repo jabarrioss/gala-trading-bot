@@ -1,6 +1,6 @@
 const BaseService = require('./BaseService');
 const { GSwap, PrivateKeySigner } = require('@gala-chain/gswap-sdk');
-const { detectGoldenCross, detectRSISignal, calculateRSI } = require('../utils/indicators');
+const { detectGoldenCross, detectRSISignal, calculateRSI, analyzeDCAStrategy } = require('../utils/indicators');
 
 /**
  * Trading Service - Handles trade execution and strategy implementation
@@ -188,6 +188,71 @@ class TradingService extends BaseService {
         confidence: 0,
         reasons: ['Analysis error: ' + error.message],
         error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Analyze price data and generate trading signals using DCA (Dollar Cost Averaging) strategy
+   * @param {number} currentPrice - Current price of the asset
+   * @param {number[]} recentPrices - Array of recent prices for volatility analysis
+   * @param {Object} options - Analysis options
+   * @returns {Object} - Analysis result with signals
+   */
+  analyzeDCAStrategy(currentPrice, recentPrices = [], options = {}) {
+    const {
+      interval = 'daily', // 'daily', 'weekly', 'monthly'
+      amount = 10, // DCA amount in USD
+      priceThreshold = null, // Buy only if price is below this threshold
+      maxVolatility = 0.1, // Max volatility threshold (10%)
+      volatilityWindow = 7,
+      lastExecutionTime = null
+    } = options;
+
+    try {
+      const dcaAnalysis = analyzeDCAStrategy({
+        interval,
+        lastExecutionTime,
+        amount,
+        priceThreshold,
+        currentPrice,
+        volatilityWindow,
+        prices: recentPrices,
+        maxVolatility
+      });
+
+      this.logger.info('DCA Analysis completed:', {
+        signal: dcaAnalysis.signal,
+        shouldExecute: dcaAnalysis.shouldExecute,
+        confidence: dcaAnalysis.confidence,
+        reasons: dcaAnalysis.reasons,
+        nextExecution: dcaAnalysis.nextExecution
+      });
+
+      return {
+        signal: dcaAnalysis.signal,
+        confidence: dcaAnalysis.confidence,
+        reasons: dcaAnalysis.reasons,
+        shouldExecute: dcaAnalysis.shouldExecute,
+        strategy: 'DCA',
+        interval: interval,
+        amount: amount,
+        currentPrice: currentPrice,
+        priceThreshold: priceThreshold,
+        volatility: dcaAnalysis.volatility,
+        nextExecution: dcaAnalysis.nextExecution,
+        timestamp: new Date().toISOString()
+      };
+
+    } catch (error) {
+      this.logger.error('Error analyzing DCA strategy:', error);
+      return {
+        signal: null,
+        confidence: 0,
+        reasons: ['Analysis error: ' + error.message],
+        error: error.message,
+        strategy: 'DCA',
         timestamp: new Date().toISOString()
       };
     }
@@ -521,6 +586,172 @@ class TradingService extends BaseService {
         success: false,
         error: error.message,
         analysis,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Execute DCA (Dollar Cost Averaging) strategy trade
+   * @param {Object} analysis - DCA strategy analysis result
+   * @param {Object} options - Trade options
+   * @returns {Object} - Trade result
+   */
+  async executeDCAStrategy(analysis, options = {}) {
+    const { 
+      targetSymbol = 'GALA', 
+      minimumConfidence = 0.5,
+      recordExecution = true // Whether to record execution time in database
+    } = options;
+
+    try {
+      if (!analysis || !analysis.signal) {
+        return {
+          success: false,
+          error: 'No valid DCA signal',
+          analysis
+        };
+      }
+
+      if (!analysis.shouldExecute) {
+        return {
+          success: false,
+          error: 'DCA execution not due yet',
+          nextExecution: analysis.nextExecution,
+          analysis
+        };
+      }
+
+      if (analysis.confidence < minimumConfidence) {
+        return {
+          success: false,
+          error: `Confidence ${analysis.confidence.toFixed(2)} below minimum ${minimumConfidence}`,
+          analysis
+        };
+      }
+
+      // DCA is always buying the target symbol with GUSDC
+      const tradeResult = await this.executeSwap(
+        'GUSDC|Unit|none|none', // From GUSDC
+        'GALA|Unit|none|none',  // To GALA
+        analysis.amount,
+        {
+          ...options,
+          slippage: options.slippage || this.defaultSlippage
+        }
+      );
+
+      // Record execution time if successful and not dry run
+      if (tradeResult.success && !tradeResult.dryRun && recordExecution) {
+        try {
+          const databaseService = this.getDatabaseService();
+          await databaseService.logTrade({
+            strategy: 'DCA',
+            symbol: targetSymbol,
+            side: 'BUY',
+            amount: analysis.amount,
+            price: analysis.currentPrice,
+            total_value: analysis.amount * analysis.currentPrice,
+            slippage: options.slippage || this.defaultSlippage,
+            status: 'COMPLETED',
+            tx_hash: tradeResult.transaction?.transactionId || null,
+            dry_run: false,
+            executed_at: new Date().toISOString(),
+            notes: `DCA ${analysis.interval} - ${analysis.reasons.join(', ')}`
+          });
+
+          this.logger.info('DCA execution recorded in database');
+        } catch (dbError) {
+          this.logger.warn('Failed to record DCA execution in database:', dbError);
+        }
+      }
+
+      return {
+        success: tradeResult?.success || false,
+        strategy: 'DCA',
+        signal: analysis.signal,
+        confidence: analysis.confidence,
+        reasons: analysis.reasons,
+        interval: analysis.interval,
+        amount: analysis.amount,
+        currentPrice: analysis.currentPrice,
+        volatility: analysis.volatility,
+        nextExecution: analysis.nextExecution,
+        trade: tradeResult,
+        timestamp: new Date().toISOString()
+      };
+
+    } catch (error) {
+      this.logger.error('Error executing DCA strategy:', error);
+      return {
+        success: false,
+        error: error.message,
+        strategy: 'DCA',
+        analysis,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Get the last DCA execution time for a symbol
+   * @param {string} symbol - Symbol to check (default: 'GALA')
+   * @returns {Promise<string|null>} - Last execution timestamp or null
+   */
+  async getLastDCAExecution(symbol = 'GALA') {
+    try {
+      const databaseService = this.getDatabaseService();
+      return await databaseService.getLastTradeExecution('DCA', symbol);
+    } catch (error) {
+      this.logger.error(`Error getting last DCA execution for ${symbol}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get comprehensive DCA strategy data including analysis and execution
+   * @param {number} currentPrice - Current price of the asset
+   * @param {number[]} recentPrices - Array of recent prices
+   * @param {Object} options - DCA options
+   * @returns {Promise<Object>} - Complete DCA data
+   */
+  async getDCAStrategyData(currentPrice, recentPrices = [], options = {}) {
+    const { symbol = 'GALA' } = options;
+
+    try {
+      // Get last execution time
+      const lastExecutionTime = await this.getLastDCAExecution(symbol);
+      
+      // Perform analysis with execution time
+      const analysis = this.analyzeDCAStrategy(currentPrice, recentPrices, {
+        ...options,
+        lastExecutionTime
+      });
+
+      // Get trade statistics
+      const databaseService = this.getDatabaseService();
+      const tradeStats = await databaseService.getTradeStats('DCA', symbol);
+      const recentTrades = await databaseService.getTradeHistory('DCA', {
+        symbol,
+        limit: 10
+      });
+
+      return {
+        analysis,
+        lastExecution: lastExecutionTime,
+        statistics: tradeStats,
+        recentTrades,
+        timestamp: new Date().toISOString()
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting DCA strategy data for ${symbol}:`, error);
+      return {
+        analysis: null,
+        lastExecution: null,
+        statistics: null,
+        recentTrades: [],
+        error: error.message,
         timestamp: new Date().toISOString()
       };
     }
