@@ -17,6 +17,7 @@ class TradingService extends BaseService {
     this.lastTradeTime = null;
     this.minTimeBetweenTrades = 60 * 60 * 1000; // 1 hour minimum between trades
     this.databaseService = null;
+    this.walletAddress = null;
   }
 
   /**
@@ -25,9 +26,8 @@ class TradingService extends BaseService {
    */
   getDatabaseService() {
     if (!this.databaseService) {
-      const { ServiceManager } = require('./ServiceManager');
-      this.databaseService = ServiceManager.get('DatabaseService');
-      
+      const ServiceManager = require('./ServiceManager');
+      this.databaseService = ServiceManager.get('database');
       if (!this.databaseService) {
         throw new Error('DatabaseService not available');
       }
@@ -60,6 +60,7 @@ class TradingService extends BaseService {
       this.minTradeAmount = parseFloat(this.config.get('MIN_TRADE_AMOUNT', '1'));
       this.maxTradeAmount = parseFloat(this.config.get('MAX_TRADE_AMOUNT', '100'));
       this.minTimeBetweenTrades = parseInt(this.config.get('MIN_TIME_BETWEEN_TRADES_MS', '3600000'));
+      this.walletAddress = this.config.get('WALLET_ADDRESS');
 
       this.logger.info('Trading configuration:', {
         isDryRun: this.isDryRun,
@@ -361,6 +362,7 @@ class TradingService extends BaseService {
             exactIn: amount,
             amountOutMinimum: minimumOutput
           }
+          , this.walletAddress
         );
 
         this.lastTradeTime = Date.now();

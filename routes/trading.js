@@ -481,9 +481,7 @@ router.get('/symbols/:symbol', async (req, res) => {
   try {
     const databaseService = serviceManager.get('database');
     const symbol = req.params.symbol;
-    
     const symbolData = await databaseService.getMonitoredSymbol(symbol);
-
     if (!symbolData) {
       return res.status(404).json({
         success: false,
@@ -697,8 +695,16 @@ router.get('/historical', async (req, res) => {
 router.post('/symbol/:symbol/trade', async (req, res) => {
   try {
     const { symbol } = req.params;
-    const { amount, toToken, dryRun } = req.body;
-    
+    let { amount, toToken, dryRun } = req.body;
+    // Convert toToken to a gala_symbol format if needed
+    // e.g. 'TOKEN|Unit|none|none'
+    if (toToken && !toToken.startsWith('G')) {
+      toToken = `G${toToken}|Unit|none|none`;
+    }
+    if( toToken && !toToken.includes('|Unit|none|none') ) {
+      toToken = `${toToken}|Unit|none|none`;
+    }
+
     const tradingService = serviceManager.get('trading');
     const result = await tradingService.executeSwapForSymbol(
       symbol, 
