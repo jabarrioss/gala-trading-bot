@@ -1720,16 +1720,45 @@ class TradingService extends BaseService {
         ? parseFloat(swapResult.expectedOutput)
         : parseFloat(swapResult.quote.quote.outTokenAmount.toString());
 
-      // Close the position in database
+      // Get the trade ID that was logged by executeSwap
+      // The executeSwap method logs the trade internally, we need to find it
+      let buyTradeId = null;
+      try {
+        const databaseService = this.getDatabaseService();
+        
+        // Get the most recent BUY trade for this symbol and strategy
+        const recentTrades = await databaseService.getTradeHistory(strategy, {
+          symbol: symbol,
+          limit: 5,
+          startDate: new Date(Date.now() - 60000).toISOString() // Within the last minute
+        });
+        
+        // Find the most recent BUY trade that matches our swap
+        const buyTrade = recentTrades.find(trade => 
+          trade.side === 'BUY' && 
+          trade.symbol === symbol &&
+          Math.abs(trade.amount - token_amount) < 0.001 // Allow for small floating point differences
+        );
+        
+        if (buyTrade) {
+          buyTradeId = buyTrade.id;
+          this.logger.info(`📊 Found corresponding BUY trade ID: ${buyTradeId}`);
+        } else {
+          this.logger.warn(`⚠️ Could not find corresponding BUY trade for position ${positionId}`);
+        }
+      } catch (tradeIdError) {
+        this.logger.warn('Failed to find BUY trade ID:', tradeIdError.message);
+      }
+
+      // Close the position in database with the proper trade ID
       const databaseService = this.getDatabaseService();
-      
-      // Find the trade ID from the swap result (we need to get it from the logged trade)
-      // For now, we'll create a simple note with the transaction info
       const closeNotes = swapResult.dryRun 
         ? `DRY RUN: Buyback completed, would receive ${finalGalaAmount} GALA`
         : `Buyback completed: ${swapResult.transaction?.transactionId || 'N/A'}`;
 
-      await databaseService.closePosition(positionId, null, closeNotes);
+      await databaseService.closePosition(positionId, buyTradeId, closeNotes);
+
+      this.logger.info(`✅ Position ${positionId} closed with BUY trade ID: ${buyTradeId || 'N/A'}`);
 
       // Send notification
       try {
@@ -1756,23 +1785,49 @@ class TradingService extends BaseService {
         symbol,
         finalGalaAmount,
         swapResult,
-        tradeId: null // We'll need to enhance this later
+        tradeId: buyTradeId
       };
 
     } catch (error) {
-      // Mark position as failed
+      this.logger.error(`❌ Buyback failed for position ${positionId}: ${error.message}`);
+      
+      // Instead of marking as failed immediately, increment retry count and keep monitoring
       try {
         const databaseService = this.getDatabaseService();
-        await databaseService.markPositionFailed(positionId, `Buyback failed: ${error.message}`);
+        
+        // Update the position with failure details but keep it OPEN for retry
+        const failureNote = `Buyback attempt failed: ${error.message} (${new Date().toISOString()})`;
+        
+        // Add retry logic - only mark as failed after multiple attempts
+        const currentRetries = position.retry_count || 0;
+        const maxRetries = 5; // Allow up to 5 retry attempts
+        
+        if (currentRetries >= maxRetries) {
+          // Mark as failed after max retries
+          await databaseService.markPositionFailed(positionId, `Max retries (${maxRetries}) exceeded. Last error: ${error.message}`);
+          this.logger.error(`❌ Position ${positionId} marked as FAILED after ${maxRetries} retry attempts`);
+        } else {
+          // Increment retry count and update notes, but keep position OPEN
+          await databaseService.updatePositionRetry(positionId, currentRetries + 1, failureNote);
+          this.logger.warn(`⚠️ Position ${positionId} retry ${currentRetries + 1}/${maxRetries}. Will retry on next monitoring cycle.`);
+        }
+        
       } catch (dbError) {
-        this.logger.error('Failed to mark position as failed:', dbError);
+        this.logger.error('Failed to update position retry status:', dbError);
+        // Fallback to original behavior if retry update fails
+        try {
+          await databaseService.markPositionFailed(positionId, `Buyback failed: ${error.message}`);
+        } catch (fallbackError) {
+          this.logger.error('Failed to mark position as failed:', fallbackError);
+        }
       }
 
       return {
         success: false,
         positionId,
         symbol,
-        error: error.message
+        error: error.message,
+        retryable: true
       };
     }
   }

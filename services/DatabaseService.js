@@ -144,6 +144,7 @@ class DatabaseService extends BaseService {
         token_amount REAL NOT NULL, -- Amount of tokens we received
         profit_threshold REAL NOT NULL DEFAULT 0.05, -- +5% profit threshold
         loss_threshold REAL NOT NULL DEFAULT -0.02, -- -2% loss threshold
+        retry_count INTEGER DEFAULT 0, -- Number of buyback retry attempts
         status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'CLOSED', 'FAILED')),
         close_trade_id INTEGER, -- Reference to the buyback trade when closed
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -166,6 +167,17 @@ class DatabaseService extends BaseService {
       // Column might already exist, which is fine
       if (!error.message.includes('duplicate column name')) {
         this.logger.warn('Error adding gala_symbol column:', error.message);
+      }
+    }
+
+    // Add retry_count column to open_positions if it doesn't exist (migration for existing databases)
+    try {
+      await this.run(`ALTER TABLE open_positions ADD COLUMN retry_count INTEGER DEFAULT 0`);
+      this.logger.info('Added retry_count column to open_positions table');
+    } catch (error) {
+      // Column might already exist, which is fine
+      if (!error.message.includes('duplicate column name')) {
+        this.logger.warn('Error adding retry_count column:', error.message);
       }
     }
 
@@ -951,6 +963,36 @@ class DatabaseService extends BaseService {
       }
     } catch (error) {
       this.logger.error('Error marking position as failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update position retry count and add failure notes
+   * @param {number} positionId - Position ID
+   * @param {number} retryCount - New retry count
+   * @param {string} notes - Failure notes to append
+   * @returns {Promise<boolean>} - Success status
+   */
+  async updatePositionRetry(positionId, retryCount, notes) {
+    try {
+      const sql = `
+        UPDATE open_positions 
+        SET retry_count = ?, notes = COALESCE(notes || '\n', '') || ?
+        WHERE id = ? AND status = 'OPEN'
+      `;
+
+      const result = await this.run(sql, [retryCount, notes, positionId]);
+
+      if (result.changes > 0) {
+        this.logger.info(`Position retry updated: ${positionId} - attempt ${retryCount}`);
+        return true;
+      } else {
+        this.logger.warn(`No open position found with ID: ${positionId}`);
+        return false;
+      }
+    } catch (error) {
+      this.logger.error('Error updating position retry:', error);
       throw error;
     }
   }
