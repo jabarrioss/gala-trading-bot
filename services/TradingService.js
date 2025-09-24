@@ -67,7 +67,7 @@ class TradingService extends BaseService {
       const assets = await this.gSwap.assets.getUserAssets(
         this.walletAddress,
         1, // page number
-        50 // limit - get more tokens to ensure we find GALA
+        20 // limit - get more tokens to ensure we find GALA
       );
 
       // Find GALA token
