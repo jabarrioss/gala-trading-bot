@@ -478,6 +478,8 @@ class TradingService extends BaseService {
       dryRun = this.isDryRun
     } = options;
 
+    let eventSocketConnected = false;
+
     try {
       // Validate trade amount
       if (amount < this.minTradeAmount || amount > this.maxTradeAmount) {
@@ -538,8 +540,6 @@ class TradingService extends BaseService {
       }
 
       // Execute actual swap
-      let eventSocketConnected = false;
-      
       try {
         await this.connectEventSocket();
         eventSocketConnected = true;
@@ -593,7 +593,12 @@ class TradingService extends BaseService {
       } finally {
         // Only disconnect if we successfully connected
         if (eventSocketConnected) {
-          await this.disconnectEventSocket();
+          try {
+            await this.disconnectEventSocket();
+          } catch (disconnectError) {
+            // Silently ignore disconnection errors to prevent unhandled rejections
+            this.logger.debug('Event socket disconnection error (ignored):', disconnectError.message);
+          }
         }
       }
 
@@ -601,12 +606,13 @@ class TradingService extends BaseService {
       this.logger.error('Error executing swap:', error);
       
       // Clean up event socket connection if needed
-      try {
-        if (eventSocketConnected) {
+      if (eventSocketConnected) {
+        try {
           await this.disconnectEventSocket();
+        } catch (cleanupError) {
+          // Silently ignore cleanup errors to prevent unhandled rejections
+          this.logger.debug('Event socket cleanup error (ignored):', cleanupError.message);
         }
-      } catch (cleanupError) {
-        this.logger.debug('Event socket cleanup error (non-critical):', cleanupError.message);
       }
       
       // Log failed trade

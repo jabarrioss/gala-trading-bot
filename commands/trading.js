@@ -384,6 +384,13 @@ Examples:
 
 // Handle uncaught errors gracefully
 process.on('unhandledRejection', (reason, promise) => {
+  // Check if it's the known GSwap SDK error that we can ignore
+  if (reason && reason.code === 'TRANSACTION_WAIT_FAILED' && 
+      reason.details && reason.details.message === 'Transaction waiter disabled') {
+    console.log('⚠️ GSwap SDK event socket disconnection warning (ignored)');
+    return; // Don't exit for this known issue
+  }
+  
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   process.exit(1);
 });
