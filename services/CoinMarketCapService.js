@@ -121,6 +121,12 @@ class CoinMarketCapService extends BaseService {
       throw error;
     }
   }
+
+  async getGoldenCrossData(symbol = 'GALA', options = {}) {
+    // CoinMarketCap does not provide historical data for calculating moving averages
+    // This method would need to be implemented using another data source or by storing historical data over time
+    throw new Error('getGoldenCrossData not implemented for CoinMarketCapService');
+  }
 }
 
 module.exports = CoinMarketCapService;

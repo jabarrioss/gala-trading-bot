@@ -26,6 +26,12 @@ async function runTradingAnalysis(symbol = null) {
     const yahooService = serviceManager.get('yahooFinance');
     const tradingService = serviceManager.get('trading');
     const databaseService = serviceManager.get('database');
+    // const binanceService = serviceManager.get('binance');
+
+    // // Ensure services are initialized
+    // if (!yahooService || !tradingService || !databaseService || !binanceService) {
+    //   throw new Error('Required services are not available');
+    // }
     
     const analysisResults = {};
 
@@ -44,6 +50,10 @@ async function runTradingAnalysis(symbol = null) {
       const historicalData = await yahooService.getGoldenCrossData(symbolData.yahoo_symbol, {
         lookbackDays: 250
       });
+      /*binance_symbol = symbolData.yahoo_symbol + 'USDT';
+      const historicalData = await binanceService.getGoldenCrossData(symbolData.yahoo_symbol, {
+        lookbackDays: 250
+      });*/
 
       if (!historicalData.success) {
         console.error(`❌ Failed to fetch historical data for ${symbol}:`, historicalData.error);
