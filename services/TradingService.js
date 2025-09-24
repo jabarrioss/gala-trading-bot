@@ -16,6 +16,37 @@ class TradingService extends BaseService {
     this.maxTradeAmount = 100; // Maximum GALA amount to trade
     this.lastTradeTime = null;
     this.minTimeBetweenTrades = 60 * 60 * 1000; // 1 hour minimum between trades
+    this.databaseService = null;
+  }
+
+  /**
+   * Get database service (lazy initialization)
+   * @returns {DatabaseService} Database service instance
+   */
+  getDatabaseService() {
+    if (!this.databaseService) {
+      const { ServiceManager } = require('./ServiceManager');
+      this.databaseService = ServiceManager.get('DatabaseService');
+      
+      if (!this.databaseService) {
+        throw new Error('DatabaseService not available');
+      }
+    }
+    return this.databaseService;
+  }
+
+  /**
+   * Get trading symbols from database
+   * @returns {Promise<Array>} Array of trading-enabled symbols with gala_symbol
+   */
+  async getTradingSymbols() {
+    try {
+      const databaseService = this.getDatabaseService();
+      return await databaseService.getTradingSymbols();
+    } catch (error) {
+      this.logger.error('Error getting trading symbols:', error);
+      throw error;
+    }
   }
 
   /**
@@ -208,6 +239,59 @@ class TradingService extends BaseService {
   }
 
   /**
+   * Get quote for a monitored symbol (GALA to GUSDC by default)
+   * @param {string} symbol - Symbol identifier (e.g., 'GALA')
+   * @param {number} amount - Amount to quote
+   * @param {string} toToken - Target token (default: 'GUSDC|Unit|none|none')
+   * @returns {Object} - Quote information with symbol context
+   */
+  async getQuoteForSymbol(symbol, amount, toToken = 'GUSDC|Unit|none|none') {
+    try {
+      const databaseService = this.getDatabaseService();
+      const symbolData = await databaseService.getMonitoredSymbol(symbol);
+      
+      if (!symbolData) {
+        throw new Error(`Symbol ${symbol} not found in monitored symbols`);
+      }
+
+      if (!symbolData.is_active || !symbolData.trading_enabled) {
+        throw new Error(`Symbol ${symbol} is not enabled for trading`);
+      }
+
+      if (!symbolData.gala_symbol) {
+        throw new Error(`Symbol ${symbol} missing gala_symbol for trading`);
+      }
+
+      // Validate amount against symbol limits
+      if (amount < symbolData.min_trade_amount) {
+        throw new Error(`Amount ${amount} below minimum ${symbolData.min_trade_amount} for ${symbol}`);
+      }
+
+      if (amount > symbolData.max_trade_amount) {
+        throw new Error(`Amount ${amount} above maximum ${symbolData.max_trade_amount} for ${symbol}`);
+      }
+
+      const quote = await this.getQuote(symbolData.gala_symbol, toToken, amount);
+      
+      return {
+        ...quote,
+        symbol: symbol,
+        symbolData: symbolData,
+        fromToken: symbolData.gala_symbol,
+        toToken: toToken
+      };
+
+    } catch (error) {
+      this.logger.error(`Error getting quote for symbol ${symbol}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        symbol: symbol
+      };
+    }
+  }
+
+  /**
    * Execute a swap trade
    * @param {string} fromToken - From token identifier
    * @param {string} toToken - To token identifier
@@ -308,6 +392,67 @@ class TradingService extends BaseService {
         error: error.message,
         dryRun,
         timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Execute a swap for a monitored symbol
+   * @param {string} symbol - Symbol identifier (e.g., 'GALA')
+   * @param {number} amount - Amount to swap
+   * @param {Object} options - Trade options
+   * @returns {Object} - Trade execution result with symbol context
+   */
+  async executeSwapForSymbol(symbol, amount, options = {}) {
+    const { toToken = 'GUSDC|Unit|none|none', dryRun = this.isDryRun } = options;
+    
+    try {
+      const databaseService = this.getDatabaseService();
+      const symbolData = await databaseService.getMonitoredSymbol(symbol);
+      
+      if (!symbolData) {
+        throw new Error(`Symbol ${symbol} not found in monitored symbols`);
+      }
+
+      if (!symbolData.is_active || !symbolData.trading_enabled) {
+        throw new Error(`Symbol ${symbol} is not enabled for trading`);
+      }
+
+      if (!symbolData.gala_symbol) {
+        throw new Error(`Symbol ${symbol} missing gala_symbol for trading`);
+      }
+
+      // Use symbol-specific trade limits if not overridden
+      const effectiveAmount = Math.min(
+        Math.max(amount, symbolData.min_trade_amount),
+        symbolData.max_trade_amount
+      );
+
+      if (effectiveAmount !== amount) {
+        this.logger.warn(`Amount adjusted for ${symbol}: ${amount} -> ${effectiveAmount}`);
+      }
+
+      const result = await this.executeSwap(symbolData.gala_symbol, toToken, effectiveAmount, {
+        ...options,
+        dryRun
+      });
+      
+      return {
+        ...result,
+        symbol: symbol,
+        symbolData: symbolData,
+        fromToken: symbolData.gala_symbol,
+        toToken: toToken,
+        effectiveAmount: effectiveAmount,
+        originalAmount: amount
+      };
+
+    } catch (error) {
+      this.logger.error(`Error executing swap for symbol ${symbol}:`, error);
+      return {
+        success: false,
+        error: error.message,
+        symbol: symbol
       };
     }
   }

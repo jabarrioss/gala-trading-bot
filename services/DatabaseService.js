@@ -67,6 +67,7 @@ class DatabaseService extends BaseService {
         symbol TEXT NOT NULL UNIQUE,
         display_name TEXT NOT NULL,
         yahoo_symbol TEXT NOT NULL,
+        gala_symbol TEXT NOT NULL,
         is_active BOOLEAN NOT NULL DEFAULT 1,
         trading_enabled BOOLEAN NOT NULL DEFAULT 1,
         min_trade_amount REAL DEFAULT 1,
@@ -135,6 +136,17 @@ class DatabaseService extends BaseService {
       await this.run(tableSql);
     }
 
+    // Add gala_symbol column if it doesn't exist (migration for existing databases)
+    try {
+      await this.run(`ALTER TABLE monitored_symbols ADD COLUMN gala_symbol TEXT`);
+      this.logger.info('Added gala_symbol column to monitored_symbols table');
+    } catch (error) {
+      // Column might already exist, which is fine
+      if (!error.message.includes('duplicate column name')) {
+        this.logger.warn('Error adding gala_symbol column:', error.message);
+      }
+    }
+
     // Create indexes for better performance
     const indexes = [
       'CREATE INDEX IF NOT EXISTS idx_monitored_symbols_active ON monitored_symbols(is_active, trading_enabled)',
@@ -149,6 +161,22 @@ class DatabaseService extends BaseService {
     }
 
     this.logger.info('Database tables and indexes created successfully');
+    
+    // Update existing GALA symbol with gala_symbol if missing
+    try {
+      const existingGala = await this.get(
+        "SELECT * FROM monitored_symbols WHERE symbol = 'GALA'"
+      );
+      
+      if (existingGala && !existingGala.gala_symbol) {
+        await this.run(
+          `UPDATE monitored_symbols SET gala_symbol = 'GALA|Unit|none|none' WHERE symbol = 'GALA'`
+        );
+        this.logger.info("Updated GALA symbol with gala_symbol format");
+      }
+    } catch (error) {
+      this.logger.warn("Error updating GALA symbol with gala_symbol:", error.message);
+    }
   }
 
   /**
@@ -334,12 +362,17 @@ class DatabaseService extends BaseService {
       symbol,
       display_name,
       yahoo_symbol,
+      gala_symbol,
       is_active = true,
       trading_enabled = true,
       min_trade_amount = 1,
       max_trade_amount = 100,
       strategy_config = null
     } = symbolData;
+
+    if (!gala_symbol) {
+      throw new Error('gala_symbol is required for trading operations');
+    }
 
     const strategyConfigStr = strategy_config ? JSON.stringify(strategy_config) : null;
 
@@ -354,11 +387,11 @@ class DatabaseService extends BaseService {
         // Update existing
         const result = await this.run(
           `UPDATE monitored_symbols 
-           SET display_name = ?, yahoo_symbol = ?, is_active = ?, trading_enabled = ?,
+           SET display_name = ?, yahoo_symbol = ?, gala_symbol = ?, is_active = ?, trading_enabled = ?,
                min_trade_amount = ?, max_trade_amount = ?, strategy_config = ?,
                updated_at = CURRENT_TIMESTAMP
            WHERE symbol = ?`,
-          [display_name, yahoo_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
+          [display_name, yahoo_symbol, gala_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
            min_trade_amount, max_trade_amount, strategyConfigStr, symbol]
         );
         
@@ -367,10 +400,10 @@ class DatabaseService extends BaseService {
         // Insert new
         const result = await this.run(
           `INSERT INTO monitored_symbols 
-           (symbol, display_name, yahoo_symbol, is_active, trading_enabled,
+           (symbol, display_name, yahoo_symbol, gala_symbol, is_active, trading_enabled,
             min_trade_amount, max_trade_amount, strategy_config)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [symbol, display_name, yahoo_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [symbol, display_name, yahoo_symbol, gala_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
            min_trade_amount, max_trade_amount, strategyConfigStr]
         );
         
@@ -474,6 +507,7 @@ class DatabaseService extends BaseService {
             symbol: 'GALA',
             display_name: 'Gala Games',
             yahoo_symbol: 'GALA-USD',
+            gala_symbol: 'GALA|Unit|none|none',
             is_active: true,
             trading_enabled: true,
             min_trade_amount: 1,
@@ -510,6 +544,7 @@ class DatabaseService extends BaseService {
       symbol,
       display_name,
       yahoo_symbol,
+      gala_symbol,
       is_active = true,
       trading_enabled = true,
       min_trade_amount = 1,
@@ -534,11 +569,11 @@ class DatabaseService extends BaseService {
             // Update existing
             this.db.run(
               `UPDATE monitored_symbols 
-               SET display_name = ?, yahoo_symbol = ?, is_active = ?, trading_enabled = ?,
+               SET display_name = ?, yahoo_symbol = ?, gala_symbol = ?, is_active = ?, trading_enabled = ?,
                    min_trade_amount = ?, max_trade_amount = ?, strategy_config = ?,
                    updated_at = CURRENT_TIMESTAMP
                WHERE symbol = ?`,
-              [display_name, yahoo_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
+              [display_name, yahoo_symbol, gala_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
                min_trade_amount, max_trade_amount, strategyConfigStr, symbol],
               function(err) {
                 if (err) reject(err);
@@ -549,10 +584,10 @@ class DatabaseService extends BaseService {
             // Insert new
             this.db.run(
               `INSERT INTO monitored_symbols 
-               (symbol, display_name, yahoo_symbol, is_active, trading_enabled,
+               (symbol, display_name, yahoo_symbol, gala_symbol, is_active, trading_enabled,
                 min_trade_amount, max_trade_amount, strategy_config)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [symbol, display_name, yahoo_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [symbol, display_name, yahoo_symbol, gala_symbol, is_active ? 1 : 0, trading_enabled ? 1 : 0,
                min_trade_amount, max_trade_amount, strategyConfigStr],
               function(err) {
                 if (err) reject(err);

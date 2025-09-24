@@ -22,7 +22,7 @@ router.get('/', async function(req, res, next) {
   console.log(`Best rate found on ${quote.feeTier} fee tier pool`);
   // Execute a swap using the best fee tier from the quote
   const pendingTx = await gSwap.swaps.swap(
-    'GALA|Unit|none|none',
+    'GALA|Unit|none|none', // gala_symbol
     'GUSDC|Unit|none|none',
     quote.feeTier,
     {

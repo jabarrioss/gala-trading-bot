@@ -693,4 +693,24 @@ router.get('/historical', async (req, res) => {
   }
 });
 
+// Test endpoint for executing trades on a specific symbol
+router.post('/symbol/:symbol/trade', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { amount, toToken, dryRun } = req.body;
+    
+    const tradingService = serviceManager.get('trading');
+    const result = await tradingService.executeSwapForSymbol(
+      symbol, 
+      amount, 
+      { toToken, dryRun }
+    );
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Trading error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

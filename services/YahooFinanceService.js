@@ -40,7 +40,7 @@ class YahooFinanceService extends BaseService {
   getDatabaseService() {
     if (!this.databaseService) {
       const { ServiceManager } = require('./ServiceManager');
-      this.databaseService = ServiceManager.getService('DatabaseService');
+      this.databaseService = ServiceManager.get('DatabaseService');
       
       if (!this.databaseService) {
         throw new Error('DatabaseService not available');
