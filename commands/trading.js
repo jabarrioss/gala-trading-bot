@@ -300,7 +300,31 @@ async function main() {
               return;
             }
 
-            // Execute automated trading with DCA strategy
+            // FIRST: Check open positions for conditional buyback
+            console.log('🔍 Checking open positions for buyback conditions...');
+            const positionResult = await tradingService.monitorOpenPositions('dca');
+            
+            if (positionResult.success) {
+              console.log(`📊 Position monitoring: ${positionResult.positionsChecked} checked, ${positionResult.buybacksExecuted} buybacks executed`);
+              
+              if (positionResult.buybacksExecuted > 0) {
+                console.log('💰 Buyback Results:');
+                positionResult.results.filter(r => r.buybackExecuted).forEach(result => {
+                  console.log(`   ${result.symbol}: ${result.decision} - Final PnL: ${result.final_pnl?.percentagePnL?.toFixed(2)}%`);
+                });
+              }
+              
+              if (positionResult.buybacksFailed > 0) {
+                console.log('❌ Failed Buybacks:');
+                positionResult.results.filter(r => r.buybackFailed).forEach(result => {
+                  console.log(`   ${result.symbol}: ${result.error || 'Unknown error'}`);
+                });
+              }
+            } else {
+              console.error('❌ Position monitoring failed:', positionResult.error);
+            }
+
+            // SECOND: Execute new automated trading (SELL signals)
             const result = await tradingService.executeAutomatedTrading({
               strategy: 'dca',
               minimumConfidence: 0.7,
@@ -342,6 +366,12 @@ async function main() {
         try {
           const tradingService = serviceManager.get('trading');
           if (tradingService) {
+            // Check positions first
+            console.log('🔍 Checking open positions for buyback conditions...');
+            const positionResult = await tradingService.monitorOpenPositions('dca');
+            console.log(`📊 Initial position check: ${positionResult.positionsChecked} positions, ${positionResult.buybacksExecuted} buybacks executed`);
+            
+            // Then run trading analysis
             const result = await tradingService.executeAutomatedTrading({
               strategy: 'dca',
               minimumConfidence: 0.7,

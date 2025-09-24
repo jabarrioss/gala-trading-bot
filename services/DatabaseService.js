@@ -129,6 +129,28 @@ class DatabaseService extends BaseService {
         message TEXT NOT NULL,
         details TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+
+      // Open positions table - tracks positions waiting for buyback
+      `CREATE TABLE IF NOT EXISTS open_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        strategy TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        token_symbol TEXT NOT NULL, -- The token we're holding (e.g., 'GUSDC', 'GWETH')
+        gala_symbol TEXT NOT NULL, -- The GalaChain token identifier
+        entry_trade_id INTEGER NOT NULL, -- Reference to the initial SELL trade
+        entry_price REAL NOT NULL, -- Price when we sold GALA for the token
+        entry_amount REAL NOT NULL, -- Amount of GALA we sold
+        token_amount REAL NOT NULL, -- Amount of tokens we received
+        profit_threshold REAL NOT NULL DEFAULT 0.05, -- +5% profit threshold
+        loss_threshold REAL NOT NULL DEFAULT -0.02, -- -2% loss threshold
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN', 'CLOSED', 'FAILED')),
+        close_trade_id INTEGER, -- Reference to the buyback trade when closed
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        closed_at DATETIME,
+        notes TEXT,
+        FOREIGN KEY (entry_trade_id) REFERENCES trades(id),
+        FOREIGN KEY (close_trade_id) REFERENCES trades(id)
       )`
     ];
 
@@ -794,6 +816,142 @@ class DatabaseService extends BaseService {
           resolve();
         });
       });
+    }
+  }
+
+  /**
+   * Create an open position record
+   * @param {Object} positionData - Position data
+   * @returns {Promise<number>} - Position ID
+   */
+  async createOpenPosition(positionData) {
+    const {
+      strategy,
+      symbol,
+      token_symbol,
+      gala_symbol,
+      entry_trade_id,
+      entry_price,
+      entry_amount,
+      token_amount,
+      profit_threshold = 0.05,
+      loss_threshold = -0.02,
+      notes = null
+    } = positionData;
+
+    try {
+      const sql = `
+        INSERT INTO open_positions (
+          strategy, symbol, token_symbol, gala_symbol,
+          entry_trade_id, entry_price, entry_amount, token_amount,
+          profit_threshold, loss_threshold, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `;
+
+      const result = await this.run(sql, [
+        strategy, symbol, token_symbol, gala_symbol,
+        entry_trade_id, entry_price, entry_amount, token_amount,
+        profit_threshold, loss_threshold, notes
+      ]);
+
+      this.logger.info(`Open position created: ${strategy} ${symbol} -> ${token_symbol}`, {
+        positionId: result.lastID,
+        entryPrice: entry_price,
+        tokenAmount: token_amount
+      });
+
+      return result.lastID;
+    } catch (error) {
+      this.logger.error('Error creating open position:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all open positions
+   * @param {string} strategy - Strategy name (optional)
+   * @returns {Promise<Array>} - Array of open position records
+   */
+  async getOpenPositions(strategy = null) {
+    try {
+      let sql = `SELECT * FROM open_positions WHERE status = 'OPEN'`;
+      const params = [];
+
+      if (strategy) {
+        sql += ' AND strategy = ?';
+        params.push(strategy);
+      }
+
+      sql += ' ORDER BY created_at ASC';
+
+      return await this.all(sql, params);
+    } catch (error) {
+      this.logger.error('Error getting open positions:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Close an open position
+   * @param {number} positionId - Position ID
+   * @param {number} closeTradeId - ID of the closing trade
+   * @param {string} notes - Optional notes
+   * @returns {Promise<boolean>} - Success status
+   */
+  async closePosition(positionId, closeTradeId, notes = null) {
+    try {
+      const sql = `
+        UPDATE open_positions 
+        SET status = 'CLOSED', close_trade_id = ?, closed_at = ?, notes = ?
+        WHERE id = ? AND status = 'OPEN'
+      `;
+
+      const result = await this.run(sql, [
+        closeTradeId,
+        new Date().toISOString(),
+        notes,
+        positionId
+      ]);
+
+      if (result.changes > 0) {
+        this.logger.info(`Position closed: ${positionId} with trade ${closeTradeId}`);
+        return true;
+      } else {
+        this.logger.warn(`No open position found with ID: ${positionId}`);
+        return false;
+      }
+    } catch (error) {
+      this.logger.error('Error closing position:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Mark a position as failed
+   * @param {number} positionId - Position ID
+   * @param {string} notes - Failure reason
+   * @returns {Promise<boolean>} - Success status
+   */
+  async markPositionFailed(positionId, notes) {
+    try {
+      const sql = `
+        UPDATE open_positions 
+        SET status = 'FAILED', notes = ?
+        WHERE id = ? AND status = 'OPEN'
+      `;
+
+      const result = await this.run(sql, [notes, positionId]);
+
+      if (result.changes > 0) {
+        this.logger.info(`Position marked as failed: ${positionId} - ${notes}`);
+        return true;
+      } else {
+        this.logger.warn(`No open position found with ID: ${positionId}`);
+        return false;
+      }
+    } catch (error) {
+      this.logger.error('Error marking position as failed:', error);
+      throw error;
     }
   }
 

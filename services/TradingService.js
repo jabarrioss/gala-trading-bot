@@ -1,6 +1,7 @@
 const BaseService = require('./BaseService');
 const { GSwap, PrivateKeySigner } = require('@gala-chain/gswap-sdk');
 const { detectGoldenCross, detectRSISignal, calculateRSI, analyzeDCAStrategy } = require('../utils/indicators');
+const { calculatePnLPercentage, shouldBuyback, calculateExpectedBuyback, calculateFinalPnL, formatPnL } = require('../utils/pnl');
 
 /**
  * Trading Service - Handles trade execution and strategy implementation
@@ -515,11 +516,12 @@ class TradingService extends BaseService {
       if (dryRun) {
         this.logger.info('DRY RUN: Trade would be executed with above parameters');
         // Log dry run trade
-        await this.logTradeExecution({
+        const executedPrice = quote.outTokenAmount.dividedBy(amount).toNumber();
+        const tradeId = await this.logTradeExecution({
           fromToken,
           toToken,
           amount,
-          expectedPrice: quote.outTokenAmount.dividedBy(amount).toNumber(),
+          expectedPrice: executedPrice,
           expectedOutput: quote.outTokenAmount.toString(),
           slippage,
           feeTier: quote.feeTier,
@@ -528,6 +530,32 @@ class TradingService extends BaseService {
           strategy: options.strategy || 'Manual',
           notes: 'Dry run execution - no actual swap performed'
         });
+
+        // If this is a SELL trade (GALA -> token), create an open position for dry run tracking
+        const fromSymbol = this.formatTokenName(fromToken);
+        const toSymbol = this.formatTokenName(toToken);
+        
+        if (fromSymbol === 'GALA' && tradeId) {
+          try {
+            const databaseService = this.getDatabaseService();
+            const positionId = await databaseService.createOpenPosition({
+              strategy: options.strategy || 'Manual',
+              symbol: `GALA/${toSymbol}`,
+              token_symbol: toSymbol,
+              gala_symbol: toToken,
+              entry_trade_id: tradeId,
+              entry_price: executedPrice,
+              entry_amount: amount,
+              token_amount: parseFloat(quote.outTokenAmount.toString()),
+              notes: `DRY RUN: Position opened from trade ${tradeId}`
+            });
+            
+            this.logger.info(`📊 DRY RUN: Open position created: ${positionId} for ${amount} GALA -> ${quote.outTokenAmount} ${toSymbol}`);
+          } catch (positionError) {
+            this.logger.error('Error creating dry run open position:', positionError);
+            // Don't fail the trade if position tracking fails
+          }
+        }
 
         return {
           success: true,
@@ -567,7 +595,7 @@ class TradingService extends BaseService {
 
         // Log successful trade
         const executedPrice = quote.outTokenAmount.dividedBy(amount).toNumber();
-        await this.logTradeExecution({
+        const tradeId = await this.logTradeExecution({
           fromToken,
           toToken,
           amount,
@@ -581,6 +609,32 @@ class TradingService extends BaseService {
           txHash: pendingTx.transactionId,
           notes: `Live trade executed successfully on ${quote.feeTier} fee tier`
         });
+
+        // If this is a SELL trade (GALA -> token), create an open position to track for buyback
+        const fromSymbol = this.formatTokenName(fromToken);
+        const toSymbol = this.formatTokenName(toToken);
+        
+        if (fromSymbol === 'GALA' && tradeId) {
+          try {
+            const databaseService = this.getDatabaseService();
+            const positionId = await databaseService.createOpenPosition({
+              strategy: options.strategy || 'Manual',
+              symbol: `GALA/${toSymbol}`,
+              token_symbol: toSymbol,
+              gala_symbol: toToken,
+              entry_trade_id: tradeId,
+              entry_price: executedPrice,
+              entry_amount: amount,
+              token_amount: parseFloat(quote.outTokenAmount.toString()),
+              notes: `Position opened from trade ${tradeId}`
+            });
+            
+            this.logger.info(`📊 Open position created: ${positionId} for ${amount} GALA -> ${quote.outTokenAmount} ${toSymbol}`);
+          } catch (positionError) {
+            this.logger.error('Error creating open position:', positionError);
+            // Don't fail the trade if position tracking fails
+          }
+        }
 
         return {
           success: true,
@@ -1424,6 +1478,280 @@ class TradingService extends BaseService {
         totalVolume: 0,
         averageTradeSize: 0,
         successRate: 0
+      };
+    }
+  }
+
+  /**
+   * Monitor open positions and execute conditional buyback
+   * @param {string} strategy - Strategy name to filter by (optional)
+   * @returns {Promise<Object>} - Monitoring result with executed buybacks
+   */
+  async monitorOpenPositions(strategy = null) {
+    try {
+      const databaseService = this.getDatabaseService();
+      const openPositions = await databaseService.getOpenPositions(strategy);
+      
+      if (openPositions.length === 0) {
+        return {
+          success: true,
+          message: 'No open positions to monitor',
+          positionsChecked: 0,
+          buybacksExecuted: 0,
+          buybacksFailed: 0,
+          results: []
+        };
+      }
+
+      this.logger.info(`📊 Monitoring ${openPositions.length} open positions for buyback conditions`);
+
+      const results = [];
+      let buybacksExecuted = 0;
+      let buybacksFailed = 0;
+
+      // Get price oracle service for current token prices
+      const ServiceManager = require('./ServiceManager');
+      const priceOracleService = ServiceManager.get('priceOracle');
+      
+      if (!priceOracleService) {
+        throw new Error('PriceOracleService not available for position monitoring');
+      }
+
+      for (const position of openPositions) {
+        try {
+          const result = await this.checkPositionForBuyback(position, priceOracleService);
+          results.push(result);
+          
+          if (result.buybackExecuted) {
+            buybacksExecuted++;
+          } else if (result.buybackFailed) {
+            buybacksFailed++;
+          }
+        } catch (error) {
+          this.logger.error(`Error checking position ${position.id}:`, error);
+          results.push({
+            positionId: position.id,
+            symbol: position.symbol,
+            error: error.message,
+            buybackExecuted: false,
+            buybackFailed: true
+          });
+          buybacksFailed++;
+        }
+      }
+
+      const summary = {
+        success: true,
+        positionsChecked: openPositions.length,
+        buybacksExecuted,
+        buybacksFailed,
+        results
+      };
+
+      this.logger.info(`📊 Position monitoring complete: ${buybacksExecuted} buybacks executed, ${buybacksFailed} failed`);
+      
+      return summary;
+
+    } catch (error) {
+      this.logger.error('Error monitoring open positions:', error);
+      return {
+        success: false,
+        error: error.message,
+        positionsChecked: 0,
+        buybacksExecuted: 0,
+        buybacksFailed: 0,
+        results: []
+      };
+    }
+  }
+
+  /**
+   * Check a single position for buyback conditions and execute if needed
+   * @param {Object} position - Position record from database
+   * @param {Object} priceOracleService - Price oracle service instance
+   * @returns {Promise<Object>} - Check result
+   */
+  async checkPositionForBuyback(position, priceOracleService) {
+    const {
+      id: positionId,
+      symbol,
+      token_symbol,
+      gala_symbol,
+      entry_price,
+      entry_amount,
+      token_amount,
+      profit_threshold,
+      loss_threshold,
+      strategy
+    } = position;
+
+    try {
+      // Get current price of the token
+      const priceData = await priceOracleService.getCurrentPrice(gala_symbol);
+      
+      if (!priceData.success) {
+        throw new Error(`Failed to get current price for ${token_symbol}: ${priceData.error}`);
+      }
+
+      const currentPrice = priceData.price;
+      
+      // Calculate PnL
+      const pnlPercentage = calculatePnLPercentage(entry_price, currentPrice);
+      const buybackDecision = shouldBuyback(
+        pnlPercentage, 
+        profit_threshold * 100, // Convert to percentage 
+        loss_threshold * 100    // Convert to percentage
+      );
+
+      this.logger.info(`📊 Position ${positionId} (${symbol}): PnL ${formatPnL(pnlPercentage)} - ${buybackDecision.description}`);
+
+      const result = {
+        positionId,
+        symbol,
+        token_symbol,
+        entry_price,
+        current_price: currentPrice,
+        pnl_percentage: pnlPercentage,
+        decision: buybackDecision.reason,
+        description: buybackDecision.description,
+        buybackExecuted: false,
+        buybackFailed: false
+      };
+
+      if (buybackDecision.shouldBuy) {
+        // Execute buyback
+        try {
+          const buybackResult = await this.executeBuyback(position, currentPrice);
+          
+          if (buybackResult.success) {
+            result.buybackExecuted = true;
+            result.buyback_trade_id = buybackResult.tradeId;
+            result.final_gala_amount = buybackResult.finalGalaAmount;
+            
+            // Calculate final PnL
+            const finalPnL = calculateFinalPnL(entry_amount, buybackResult.finalGalaAmount);
+            result.final_pnl = finalPnL;
+            
+            this.logger.info(`✅ Buyback executed for position ${positionId}: ${formatPnL(finalPnL.percentagePnL, finalPnL.absolutePnL)}`);
+          } else {
+            result.buybackFailed = true;
+            result.error = buybackResult.error;
+            this.logger.error(`❌ Buyback failed for position ${positionId}: ${buybackResult.error}`);
+          }
+        } catch (buybackError) {
+          result.buybackFailed = true;
+          result.error = buybackError.message;
+          this.logger.error(`❌ Buyback execution error for position ${positionId}:`, buybackError);
+        }
+      }
+
+      return result;
+
+    } catch (error) {
+      this.logger.error(`Error checking position ${positionId}:`, error);
+      return {
+        positionId,
+        symbol,
+        error: error.message,
+        buybackExecuted: false,
+        buybackFailed: true
+      };
+    }
+  }
+
+  /**
+   * Execute buyback for a position (token -> GALA)
+   * @param {Object} position - Position record
+   * @param {number} currentPrice - Current token price
+   * @returns {Promise<Object>} - Buyback execution result
+   */
+  async executeBuyback(position, currentPrice) {
+    const {
+      id: positionId,
+      symbol,
+      token_symbol,
+      gala_symbol,
+      entry_amount,
+      token_amount,
+      strategy
+    } = position;
+
+    try {
+      this.logger.info(`🔄 Executing buyback for position ${positionId}: ${token_amount} ${token_symbol} -> GALA`);
+
+      // Execute the swap from token back to GALA
+      const swapResult = await this.executeSwap(
+        gala_symbol, // from token (e.g., 'GUSDC|Unit|none|none')
+        'GALA|Unit|none|none', // to GALA
+        token_amount,
+        {
+          strategy: strategy,
+          dryRun: this.isDryRun
+        }
+      );
+
+      if (!swapResult.success) {
+        throw new Error(`Swap execution failed: ${swapResult.error}`);
+      }
+
+      // Calculate final GALA amount received
+      const finalGalaAmount = swapResult.dryRun 
+        ? parseFloat(swapResult.expectedOutput)
+        : parseFloat(swapResult.quote.quote.outTokenAmount.toString());
+
+      // Close the position in database
+      const databaseService = this.getDatabaseService();
+      
+      // Find the trade ID from the swap result (we need to get it from the logged trade)
+      // For now, we'll create a simple note with the transaction info
+      const closeNotes = swapResult.dryRun 
+        ? `DRY RUN: Buyback completed, would receive ${finalGalaAmount} GALA`
+        : `Buyback completed: ${swapResult.transaction?.transactionId || 'N/A'}`;
+
+      await databaseService.closePosition(positionId, null, closeNotes);
+
+      // Send notification
+      try {
+        const ServiceManager = require('./ServiceManager');
+        const notificationService = ServiceManager.get('notification');
+        
+        if (notificationService) {
+          const finalPnL = calculateFinalPnL(entry_amount, finalGalaAmount);
+          await notificationService.sendBuybackNotification({
+            position,
+            currentPrice,
+            finalGalaAmount,
+            finalPnL,
+            swapResult
+          });
+        }
+      } catch (notificationError) {
+        this.logger.warn('Failed to send buyback notification:', notificationError.message);
+      }
+
+      return {
+        success: true,
+        positionId,
+        symbol,
+        finalGalaAmount,
+        swapResult,
+        tradeId: null // We'll need to enhance this later
+      };
+
+    } catch (error) {
+      // Mark position as failed
+      try {
+        const databaseService = this.getDatabaseService();
+        await databaseService.markPositionFailed(positionId, `Buyback failed: ${error.message}`);
+      } catch (dbError) {
+        this.logger.error('Failed to mark position as failed:', dbError);
+      }
+
+      return {
+        success: false,
+        positionId,
+        symbol,
+        error: error.message
       };
     }
   }
