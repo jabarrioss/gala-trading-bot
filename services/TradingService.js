@@ -1341,10 +1341,11 @@ class TradingService extends BaseService {
       let side, symbol;
       if (fromSymbol === 'GALA') {
         side = 'SELL'; // Selling GALA
-        symbol = 'GALA';
+        // symbol = 'GALA';
+        symbol = `GALA/${toSymbol}`;
       } else if (toSymbol === 'GALA') {
         side = 'BUY'; // Buying GALA
-        symbol = 'GALA';
+        symbol = `GALA/${fromSymbol}`;
       } else {
         side = 'SWAP';
         symbol = `${fromSymbol}/${toSymbol}`;
